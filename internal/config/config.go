@@ -86,6 +86,9 @@ type Config struct {
 	// Routing controls credential selection behavior.
 	Routing RoutingConfig `yaml:"routing" json:"routing"`
 
+	// Concurrency configures request concurrency control defaults and endpoint overrides.
+	Concurrency ConcurrencyConfig `yaml:"concurrency" json:"concurrency"`
+
 	// WebsocketAuth enables or disables authentication for the WebSocket API.
 	WebsocketAuth bool `yaml:"ws-auth" json:"ws-auth"`
 
@@ -392,6 +395,9 @@ type ClaudeKey struct {
 	// ExcludedModels lists model IDs that should be excluded for this provider.
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
 
+	// Concurrency caps concurrent in-flight requests for this credential. 0 means unlimited.
+	Concurrency int `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+
 	// Cloak configures request cloaking for non-Claude-Code clients.
 	Cloak *CloakConfig `yaml:"cloak,omitempty" json:"cloak,omitempty"`
 
@@ -447,6 +453,9 @@ type CodexKey struct {
 
 	// ExcludedModels lists model IDs that should be excluded for this provider.
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+
+	// Concurrency caps concurrent in-flight requests for this credential. 0 means unlimited.
+	Concurrency int `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
 }
 
 func (k CodexKey) GetAPIKey() string  { return k.APIKey }
@@ -491,6 +500,9 @@ type GeminiKey struct {
 
 	// ExcludedModels lists model IDs that should be excluded for this provider.
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+
+	// Concurrency caps concurrent in-flight requests for this credential. 0 means unlimited.
+	Concurrency int `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
 }
 
 func (k GeminiKey) GetAPIKey() string  { return k.APIKey }
@@ -541,6 +553,9 @@ type OpenAICompatibilityAPIKey struct {
 
 	// ProxyURL overrides the global proxy setting for this API key if provided.
 	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// Concurrency caps concurrent in-flight requests for this credential. 0 means unlimited.
+	Concurrency int `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
 }
 
 // OpenAICompatibilityModel represents a model configuration for OpenAI compatibility,
@@ -694,6 +709,19 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Normalize global OAuth model name aliases.
 	cfg.SanitizeOAuthModelAlias()
+
+	cfg.ClientAPIKeyPolicies = NormalizeClientAPIKeyPolicies(cfg.ClientAPIKeyPolicies)
+	if err = ValidateClientAPIKeyPolicies(cfg.APIKeys, cfg.ClientAPIKeyPolicies); err != nil {
+		return nil, fmt.Errorf("invalid client-api-key-policies: %w", err)
+	}
+
+	cfg.Concurrency = NormalizeConcurrencyConfig(cfg.Concurrency)
+	if err = ValidateConcurrencyConfig(cfg.Concurrency); err != nil {
+		return nil, fmt.Errorf("invalid concurrency config: %w", err)
+	}
+	if err = ValidateProviderConcurrency(&cfg); err != nil {
+		return nil, fmt.Errorf("invalid provider concurrency config: %w", err)
+	}
 
 	// Validate raw payload rules and drop invalid entries.
 	cfg.SanitizePayloadRules()
