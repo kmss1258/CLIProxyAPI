@@ -57,9 +57,6 @@ func TestRegisterManagementRoutes(t *testing.T) {
 		{"/auth", http.MethodGet},           // Root-level auth route
 		{"/auth/cli-login", http.MethodGet}, // CLI login flow
 		{"/auth/callback", http.MethodGet},  // OAuth callback
-		// Google v1beta1 bridge should still proxy non-model requests (GET) and allow POST
-		{"/api/provider/google/v1beta1/models", http.MethodGet},
-		{"/api/provider/google/v1beta1/models", http.MethodPost},
 	}
 
 	for _, path := range managementPaths {
@@ -115,6 +112,8 @@ func TestRegisterProviderAliases_AllProvidersRegistered(t *testing.T) {
 		{"/api/provider/openai/chat/completions", http.MethodPost},
 		{"/api/provider/anthropic/v1/messages", http.MethodPost},
 		{"/api/provider/google/v1beta/models", http.MethodGet},
+		{"/api/provider/google/v1beta1/models", http.MethodGet},
+		{"/api/provider/google/v1beta1/models", http.MethodPost},
 	}
 
 	for _, tc := range paths {

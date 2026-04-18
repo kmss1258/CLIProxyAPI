@@ -14,7 +14,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/concurrency"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -39,9 +41,13 @@ type Handler struct {
 	configFilePath      string
 	mu                  sync.Mutex
 	attemptsMu          sync.Mutex
+	openAIQuotaMu       sync.Mutex
 	failedAttempts      map[string]*attemptInfo // keyed by client IP
+	openAIQuotaCache    map[string]*cachedOpenAIQuota
 	authManager         *coreauth.Manager
 	usageStats          *usage.RequestStatistics
+	quotaManager        *quota.Manager
+	concurrencyManager  *concurrency.Manager
 	tokenStore          coreauth.Store
 	localPassword       string
 	allowRemoteOverride bool
@@ -59,6 +65,7 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		cfg:                 cfg,
 		configFilePath:      configFilePath,
 		failedAttempts:      make(map[string]*attemptInfo),
+		openAIQuotaCache:    make(map[string]*cachedOpenAIQuota),
 		authManager:         manager,
 		usageStats:          usage.GetRequestStatistics(),
 		tokenStore:          sdkAuth.GetTokenStore(),
@@ -112,6 +119,12 @@ func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = ma
 
 // SetUsageStatistics allows replacing the usage statistics reference.
 func (h *Handler) SetUsageStatistics(stats *usage.RequestStatistics) { h.usageStats = stats }
+
+// SetQuotaManager allows replacing the shared quota manager reference.
+func (h *Handler) SetQuotaManager(manager *quota.Manager) { h.quotaManager = manager }
+
+// SetConcurrencyManager allows replacing the shared concurrency manager reference.
+func (h *Handler) SetConcurrencyManager(manager *concurrency.Manager) { h.concurrencyManager = manager }
 
 // SetLocalPassword configures the runtime-local password accepted for localhost requests.
 func (h *Handler) SetLocalPassword(password string) { h.localPassword = password }

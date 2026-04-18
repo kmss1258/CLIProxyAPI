@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	concurrencyruntime "github.com/router-for-me/CLIProxyAPI/v6/internal/concurrency"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
@@ -820,8 +821,14 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		resultModel := m.stateModelForExecution(auth, routeModel, execModel, pooled)
 		execReq := req
 		execReq.Model = execModel
+		releaseUpstream, errLimit := m.acquireUpstreamConcurrency(auth)
+		if errLimit != nil {
+			lastErr = errLimit
+			continue
+		}
 		streamResult, errStream := executor.ExecuteStream(ctx, auth, execReq, opts)
 		if errStream != nil {
+			releaseUpstream()
 			if errCtx := ctx.Err(); errCtx != nil {
 				return nil, errCtx
 			}
@@ -841,6 +848,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 
 		buffered, closed, bootstrapErr := readStreamBootstrap(ctx, streamResult.Chunks)
 		if bootstrapErr != nil {
+			releaseUpstream()
 			if errCtx := ctx.Err(); errCtx != nil {
 				discardStreamChunks(streamResult.Chunks)
 				return nil, errCtx
@@ -880,6 +888,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		}
 
 		if closed && len(buffered) == 0 {
+			releaseUpstream()
 			emptyErr := &Error{Code: "empty_stream", Message: "upstream stream closed before first payload", Retryable: true}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: emptyErr}
 			m.MarkResult(ctx, result)
@@ -892,11 +901,12 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 
 		remaining := streamResult.Chunks
 		if closed {
+			releaseUpstream()
 			closedCh := make(chan cliproxyexecutor.StreamChunk)
 			close(closedCh)
 			remaining = closedCh
 		}
-		return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, buffered, remaining), nil
+		return m.wrapStreamResultWithRelease(ctx, m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, buffered, remaining), releaseUpstream), nil
 	}
 	if lastErr == nil {
 		lastErr = &Error{Code: "auth_not_found", Message: "no upstream model available"}
@@ -1302,7 +1312,13 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
+			releaseUpstream, errLimit := m.acquireUpstreamConcurrency(auth)
+			if errLimit != nil {
+				authErr = errLimit
+				continue
+			}
 			resp, errExec := executor.Execute(execCtx, auth, execReq, opts)
+			releaseUpstream()
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
@@ -1380,7 +1396,13 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
+			releaseUpstream, errLimit := m.acquireUpstreamConcurrency(auth)
+			if errLimit != nil {
+				authErr = errLimit
+				continue
+			}
 			resp, errExec := executor.CountTokens(execCtx, auth, execReq, opts)
+			releaseUpstream()
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
@@ -1494,6 +1516,48 @@ func ensureRequestedModelMetadata(opts cliproxyexecutor.Options, requestedModel 
 	meta[cliproxyexecutor.RequestedModelMetadataKey] = requestedModel
 	opts.Metadata = meta
 	return opts
+}
+
+func (m *Manager) acquireUpstreamConcurrency(auth *Auth) (func(), error) {
+	if m == nil || auth == nil {
+		return func() {}, nil
+	}
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	limit := concurrencyruntime.ResolveUpstreamLimit(cfg, auth.Provider, auth.ID)
+	release, exceeded := concurrencyruntime.DefaultManager().AcquireUpstream(auth.ID, limit)
+	if exceeded == nil {
+		return release, nil
+	}
+	return func() {}, &Error{Code: exceeded.Code, Message: exceeded.Error()}
+}
+
+func (m *Manager) wrapStreamResultWithRelease(ctx context.Context, result *cliproxyexecutor.StreamResult, release func()) *cliproxyexecutor.StreamResult {
+	if result == nil || release == nil {
+		return result
+	}
+	out := make(chan cliproxyexecutor.StreamChunk)
+	go func() {
+		defer close(out)
+		defer release()
+		for {
+			select {
+			case <-ctx.Done():
+				discardStreamChunks(result.Chunks)
+				return
+			case chunk, ok := <-result.Chunks:
+				if !ok {
+					return
+				}
+				select {
+				case out <- chunk:
+				case <-ctx.Done():
+					discardStreamChunks(result.Chunks)
+					return
+				}
+			}
+		}
+	}()
+	return &cliproxyexecutor.StreamResult{Headers: result.Headers, Chunks: out}
 }
 
 func hasRequestedModelMetadata(meta map[string]any) bool {
