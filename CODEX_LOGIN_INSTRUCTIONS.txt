@@ -1,0 +1,155 @@
+Codex / OpenAI account linking steps
+
+Recommended live flow: device login
+
+1) Open this URL in your browser:
+
+https://auth.openai.com/codex/device
+
+2) Enter this device code:
+
+MJ9K-8GXVJ
+
+3) Complete the OpenAI login/approval flow in the browser.
+
+4) After approval, the running container will keep polling and should store the auth token automatically under:
+
+./auths
+
+Live process details:
+- Container: cli-proxy-api
+- Command running: ./CLIProxyAPI --codex-device-login --no-browser
+
+Older callback-based flow (not currently needed):
+- OAuth callback port: 1455
+
+========================================
+API usage examples
+========================================
+
+Server base URL:
+
+http://127.0.0.1:8317
+
+Public HTTPS base URL:
+
+https://cpa.exusio.uk
+
+Client API keys:
+
+Admin key:
+admin-9ulSY1qGfUJ-ayyGvTv1LB7TSOtrX9AT
+
+24h / 500000 output token quota key:
+quota24h-oZsFSiH-j5ly4A4C9hdMevi7FeNDqT-l
+
+1) List available models
+
+curl http://127.0.0.1:8317/v1/models \
+  -H "Authorization: Bearer admin-9ulSY1qGfUJ-ayyGvTv1LB7TSOtrX9AT"
+
+Public HTTPS example:
+
+curl https://cpa.exusio.uk/v1/models \
+  -H "Authorization: Bearer admin-9ulSY1qGfUJ-ayyGvTv1LB7TSOtrX9AT"
+
+2) Basic chat completion
+
+curl http://127.0.0.1:8317/v1/chat/completions \
+  -H "Authorization: Bearer admin-9ulSY1qGfUJ-ayyGvTv1LB7TSOtrX9AT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.4-mini",
+    "messages": [
+      {"role": "user", "content": "Reply with exactly OK"}
+    ],
+    "max_tokens": 8
+  }'
+
+Public HTTPS example:
+
+curl https://cpa.exusio.uk/v1/chat/completions \
+  -H "Authorization: Bearer admin-9ulSY1qGfUJ-ayyGvTv1LB7TSOtrX9AT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.4-mini",
+    "messages": [
+      {"role": "user", "content": "Reply with exactly PUBLIC_OK"}
+    ],
+    "max_tokens": 8
+  }'
+
+Observed result over public HTTPS:
+- GET /v1/models -> 200 OK
+- POST /v1/chat/completions -> 200 OK, reply content: PUBLIC_OK
+
+Additional verified public model calls:
+- gpt-5.4-mini -> 200 OK, reply content: gpt-5.4-mini
+- gpt-5.4 -> 200 OK, reply content: gpt-5.4
+- gpt-5.2 -> 200 OK, reply content: gpt-5.2
+
+3) Same request with the limited key
+
+curl http://127.0.0.1:8317/v1/chat/completions \
+  -H "Authorization: Bearer quota24h-oZsFSiH-j5ly4A4C9hdMevi7FeNDqT-l" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.4-mini",
+    "messages": [
+      {"role": "user", "content": "Say hello in one word"}
+    ],
+    "max_tokens": 8
+  }'
+
+4) Current recommended model IDs on this server
+
+- gpt-5.4-mini
+- gpt-5.2
+- gpt-5.4
+
+5) Temporarily disable a linked auth/account via Management API
+
+Management API key:
+
+mgmt-7woq5Uw51jvJD6JRZGfuNSOQYt_56uwQ
+
+PATCH /v0/management/auth-files/status
+
+Example body:
+
+{
+  "name": "codex-butsmaximal@protonmail.com-pro.json",
+  "disabled": true
+}
+
+Full curl example:
+
+curl http://127.0.0.1:8317/v0/management/auth-files/status \
+  -X PATCH \
+  -H "Authorization: Bearer mgmt-7woq5Uw51jvJD6JRZGfuNSOQYt_56uwQ" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "codex-butsmaximal@protonmail.com-pro.json",
+    "disabled": true
+  }'
+
+Re-enable:
+
+{
+  "name": "codex-butsmaximal@protonmail.com-pro.json",
+  "disabled": false
+}
+
+Re-enable curl example:
+
+curl http://127.0.0.1:8317/v0/management/auth-files/status \
+  -X PATCH \
+  -H "Authorization: Bearer mgmt-7woq5Uw51jvJD6JRZGfuNSOQYt_56uwQ" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "codex-butsmaximal@protonmail.com-pro.json",
+    "disabled": false
+  }'
+
+Note:
+- Management API is now enabled with the key above.
