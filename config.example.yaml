@@ -41,6 +41,41 @@ api-keys:
   - "your-api-key-2"
   - "your-api-key-3"
 
+# Optional per-client API key output token quotas.
+# output-token-quota: 0 means unlimited.
+# client-api-key-policies:
+#   - api-key: "your-api-key-1"
+#     output-token-quota: 100000
+#     # Optional: maximum concurrent in-flight requests for this client API key.
+#     # concurrency: 4
+#     # Optional: reset the quota N hours after first successful usage in each window.
+#     # output-token-quota-reset-hours: 168
+
+# Optional request concurrency controls.
+# 0 means unlimited / disabled for that scope.
+# concurrency:
+#   enabled: true
+#   defaults:
+#     global-inflight: 200
+#     client-api-key: 8
+#     upstream-account: 2
+#   endpoints:
+#     - path: /v1/chat/completions
+#       inflight: 40
+#     - path: /v1/responses
+#       inflight: 12
+
+# SQLite-backed prompt/response logging.
+# Enable request-log as well to turn request logging on.
+# sqlite-prompt-log:
+#   enabled: true
+#   path: "logs/prompt_logs.sqlite"
+#   capture-prompts: true
+#   capture-responses: true
+#   body-max-bytes: 262144
+#   retention-days: 7
+#   hash-api-keys: true
+
 # Enable debug logging
 debug: false
 
@@ -131,6 +166,7 @@ nonstream-keepalive-interval: 0
 # Gemini API keys
 # gemini-api-key:
 #   - api-key: "AIzaSy...01"
+#     # concurrency: 3
 #     prefix: "test" # optional: require calls like "test/gemini-3-pro-preview" to target this credential
 #     base-url: "https://generativelanguage.googleapis.com"
 #     headers:
@@ -150,6 +186,7 @@ nonstream-keepalive-interval: 0
 # Codex API keys
 # codex-api-key:
 #   - api-key: "sk-atSM..."
+#     # concurrency: 2
 #     prefix: "test" # optional: require calls like "test/gpt-5-codex" to target this credential
 #     base-url: "https://www.example.com" # use the custom codex API endpoint
 #     headers:
@@ -169,6 +206,7 @@ nonstream-keepalive-interval: 0
 # claude-api-key:
 #   - api-key: "sk-atSM..." # use the official claude API key, no need to set the base url
 #   - api-key: "sk-atSM..."
+#     # concurrency: 1
 #     prefix: "test" # optional: require calls like "test/claude-sonnet-latest" to target this credential
 #     base-url: "https://www.example.com" # use the custom claude API endpoint
 #     headers:
