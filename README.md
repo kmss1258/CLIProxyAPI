@@ -2,6 +2,12 @@
 
 English | [中文](README_CN.md) | [日本語](README_JA.md)
 
+> **Current branch note**
+>
+> If you are working in this fork, use `work/quota-concurrency-ui-v2` as the current working branch.
+> It was rebuilt from the latest `upstream/main` and then re-applied with the local quota / dashboard / concurrency changes.
+> Do **not** treat this fork's `main` branch as the active working baseline until those changes are intentionally merged back.
+
 A proxy server that provides OpenAI/Gemini/Claude/Codex compatible API interfaces for CLI.
 
 It now also supports OpenAI Codex (GPT models) and Claude Code via OAuth.
