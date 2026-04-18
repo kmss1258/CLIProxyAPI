@@ -38,7 +38,8 @@ func TestGetQuotaStatusReturnsQuotaUsageAndAuthFiles(t *testing.T) {
 		ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{APIKey: "k1", Alias: "Notebook", OutputTokenQuota: 100, OutputTokenQuotaResetHours: 24}},
 	}, AuthDir: authDir}
 	stats := usage.NewRequestStatistics()
-	stats.Record(nil, coreusage.Record{APIKey: "k1", Model: "gpt-5.4-mini", RequestedAt: time.Date(2026, time.April, 17, 11, 0, 0, 0, time.UTC), AuthIndex: "auth-1", Source: "test@example.com", Detail: coreusage.Detail{TotalTokens: 12}})
+	recentUsageTime := time.Now().Add(-1 * time.Hour).UTC()
+	stats.Record(nil, coreusage.Record{APIKey: "k1", Model: "gpt-5.4-mini", RequestedAt: recentUsageTime, AuthIndex: "auth-1", Source: "test@example.com", Detail: coreusage.Detail{TotalTokens: 12}})
 	manager := quota.NewManager()
 	managerTime := time.Date(2026, time.April, 17, 12, 0, 0, 0, time.UTC)
 	manager.SetNowForTest(managerTime)
