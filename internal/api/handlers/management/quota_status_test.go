@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -201,6 +202,144 @@ func TestGetQuotaStatusEnrichesAuthFilesWithOpenAIQuota(t *testing.T) {
 	}
 	if quota.Daily.ResetTimeISO != "2024-04-17T00:00:00Z" {
 		t.Fatalf("expected millisecond reset_at conversion, got %#v", quota.Daily)
+	}
+}
+
+func TestGetQuotaStatusJoinsAuthFilesAndUsageByAuthIndex(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	authPathOne := filepath.Join(tmpDir, "codex-alpha@example.com-pro.json")
+	authPathTwo := filepath.Join(tmpDir, "codex-beta@example.com-pro.json")
+	if err := os.WriteFile(authPathOne, []byte(`{"type":"codex"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() auth one error = %v", err)
+	}
+	if err := os.WriteFile(authPathTwo, []byte(`{"type":"codex"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() auth two error = %v", err)
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	authOne := &coreauth.Auth{
+		ID:       "id-auth-1",
+		Index:    "auth-1",
+		Provider: "codex",
+		FileName: "codex-alpha@example.com-pro.json",
+		Status:   coreauth.StatusActive,
+		Attributes: map[string]string{
+			"path": authPathOne,
+		},
+		Metadata: map[string]any{
+			"email":        "alpha@example.com",
+			"access_token": codexTestJWTToken("acc-1"),
+			"account_id":   "acc-1",
+			"expired":      time.Now().Add(time.Hour).Format(time.RFC3339),
+		},
+	}
+	authTwo := &coreauth.Auth{
+		ID:       "id-auth-2",
+		Index:    "auth-2",
+		Provider: "codex",
+		FileName: "codex-beta@example.com-pro.json",
+		Status:   coreauth.StatusActive,
+		Attributes: map[string]string{
+			"path": authPathTwo,
+		},
+		Metadata: map[string]any{
+			"email":        "beta@example.com",
+			"access_token": codexTestJWTToken("acc-2"),
+			"account_id":   "acc-2",
+			"expired":      time.Now().Add(time.Hour).Format(time.RFC3339),
+		},
+	}
+	if _, err := manager.Register(context.Background(), authOne); err != nil {
+		t.Fatalf("Register() auth one error = %v", err)
+	}
+	if _, err := manager.Register(context.Background(), authTwo); err != nil {
+		t.Fatalf("Register() auth two error = %v", err)
+	}
+	authIndexes := map[string]string{}
+	for _, item := range manager.List() {
+		if item == nil {
+			continue
+		}
+		authIndexes[item.ID] = item.EnsureIndex()
+	}
+	authOneIndex := authIndexes["id-auth-1"]
+	authTwoIndex := authIndexes["id-auth-2"]
+	if authOneIndex == "" || authTwoIndex == "" {
+		t.Fatalf("expected manager-assigned auth indexes, got %#v", authIndexes)
+	}
+
+	stats := usage.NewRequestStatistics()
+	stats.Record(nil, coreusage.Record{APIKey: "k1", Model: "gpt-5.4-mini", RequestedAt: time.Now().Add(-30 * time.Minute).UTC(), AuthIndex: authTwoIndex, Source: "beta@example.com", Detail: coreusage.Detail{TotalTokens: 17}})
+
+	originalFactory := newCodexAuth
+	defer func() { newCodexAuth = originalFactory }()
+	newCodexAuth = func(cfg *config.Config) *codex.CodexAuth {
+		return codex.NewCodexAuthWithHTTPClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			accountHeader := req.Header.Get("ChatGPT-Account-Id")
+			percent := 10
+			if accountHeader == "acc-2" {
+				percent = 25
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"rate_limit":{"primary_window":{"used_percent":` + strconv.Itoa(percent) + `}}}`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		})})
+	}
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{}, manager)
+	h.SetUsageStatistics(stats)
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v0/management/quota-status", nil)
+	h.GetQuotaStatus(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var payload struct {
+		AuthFiles []map[string]any `json:"auth_files"`
+		AuthUsage []map[string]any `json:"auth_usage"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v body=%s", err, rr.Body.String())
+	}
+	if len(payload.AuthFiles) != 2 {
+		t.Fatalf("expected two auth files, got %#v", payload.AuthFiles)
+	}
+	if len(payload.AuthUsage) != 1 {
+		t.Fatalf("expected one auth usage row, got %#v", payload.AuthUsage)
+	}
+
+	byIndex := map[string]map[string]any{}
+	for _, entry := range payload.AuthFiles {
+		idx, _ := entry["auth_index"].(string)
+		byIndex[idx] = entry
+	}
+	if _, ok := byIndex[authOneIndex]; !ok {
+		t.Fatalf("expected auth-1 entry, got %#v", byIndex)
+	}
+	if _, ok := byIndex[authTwoIndex]; !ok {
+		t.Fatalf("expected auth-2 entry, got %#v", byIndex)
+	}
+	if got := payload.AuthUsage[0]["auth_index"]; got != authTwoIndex {
+		t.Fatalf("expected auth_usage row for auth-2, got %#v", payload.AuthUsage[0])
+	}
+	if got := byIndex[authTwoIndex]["requests_24h"]; got != float64(1) {
+		t.Fatalf("expected auth-2 requests_24h=1, got %#v", byIndex[authTwoIndex])
+	}
+	if _, exists := byIndex[authOneIndex]["requests_24h"]; exists {
+		t.Fatalf("expected auth-1 to remain free of auth-2 usage fields, got %#v", byIndex[authOneIndex])
+	}
+	authTwoQuota, ok := byIndex[authTwoIndex]["openai_quota"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected auth-2 openai_quota payload, got %#v", byIndex[authTwoIndex])
+	}
+	daily, ok := authTwoQuota["daily"].(map[string]any)
+	if !ok || daily["percent_remaining"] != float64(75) {
+		t.Fatalf("expected auth-2 quota to reflect acc-2 response, got %#v", authTwoQuota)
 	}
 }
 
