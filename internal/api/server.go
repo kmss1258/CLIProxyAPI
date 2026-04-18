@@ -25,9 +25,11 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules/amp"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/cache"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/concurrency"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -59,9 +61,26 @@ type serverOptionConfig struct {
 type ServerOption func(*serverOptionConfig)
 
 func defaultRequestLoggerFactory(cfg *config.Config, configPath string) logging.RequestLogger {
+	if cfg.SQLitePromptLog.Enabled {
+		sqliteLogger, err := logging.NewSQLiteRequestLogger(cfg, configPath)
+		if err == nil {
+			return sqliteLogger
+		}
+		log.WithError(err).Warn("failed to initialise sqlite request logger; falling back to file logger")
+	}
 	configDir := filepath.Dir(configPath)
 	logsDir := logging.ResolveLogDirectory(cfg)
 	return logging.NewFileRequestLogger(cfg.RequestLog, logsDir, configDir, cfg.ErrorLogsMaxFiles)
+}
+
+func requestLoggerEnabled(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if cfg.SQLitePromptLog.Enabled {
+		return true
+	}
+	return cfg.RequestLog
 }
 
 // WithMiddleware appends additional Gin middleware during server construction.
@@ -257,6 +276,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// Save initial YAML snapshot
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)
 	s.applyAccessConfig(nil, cfg)
+	if errUpdateQuota := quota.DefaultManager().UpdateConfig(cfg, configFilePath); errUpdateQuota != nil {
+		log.WithError(errUpdateQuota).Warn("failed to initialise quota manager")
+	}
+	concurrency.DefaultManager().UpdateConfig(cfg)
 	if authManager != nil {
 		authManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
 	}
@@ -265,6 +288,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	applySignatureCacheConfig(nil, cfg)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
+	s.mgmt.SetQuotaManager(quota.DefaultManager())
+	s.mgmt.SetConcurrencyManager(concurrency.DefaultManager())
 	if optionState.localPassword != "" {
 		s.mgmt.SetLocalPassword(optionState.localPassword)
 	}
@@ -324,6 +349,8 @@ func (s *Server) setupRoutes() {
 	})
 
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
+	s.engine.GET("/quota.html", s.serveQuotaStatusPage)
+	s.engine.GET("/v0/quota-status", s.mgmt.GetQuotaStatusViewer)
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
 	geminiCLIHandlers := gemini.NewGeminiCLIAPIHandler(s.handlers)
@@ -332,7 +359,7 @@ func (s *Server) setupRoutes() {
 
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
-	v1.Use(AuthMiddleware(s.accessManager))
+	v1.Use(AuthMiddleware(s.accessManager), middleware.ClientQuotaMiddleware(quota.DefaultManager()), middleware.ClientConcurrencyMiddleware(concurrency.DefaultManager()))
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
@@ -346,7 +373,7 @@ func (s *Server) setupRoutes() {
 
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
-	v1beta.Use(AuthMiddleware(s.accessManager))
+	v1beta.Use(AuthMiddleware(s.accessManager), middleware.ClientQuotaMiddleware(quota.DefaultManager()), middleware.ClientConcurrencyMiddleware(concurrency.DefaultManager()))
 	{
 		v1beta.GET("/models", geminiHandlers.GeminiModels)
 		v1beta.POST("/models/*action", geminiHandlers.GeminiHandler)
@@ -355,14 +382,7 @@ func (s *Server) setupRoutes() {
 
 	// Root endpoint
 	s.engine.GET("/", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "CLI Proxy API Server",
-			"endpoints": []string{
-				"POST /v1/chat/completions",
-				"POST /v1/completions",
-				"GET /v1/models",
-			},
-		})
+		c.Status(http.StatusNoContent)
 	})
 	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
 
@@ -525,6 +545,20 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/api-keys", s.mgmt.PutAPIKeys)
 		mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
 		mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
+		mgmt.GET("/client-api-key-policies", s.mgmt.GetClientAPIKeyPolicies)
+		mgmt.PUT("/client-api-key-policies", s.mgmt.PutClientAPIKeyPolicies)
+		mgmt.PATCH("/client-api-key-policies", s.mgmt.PatchClientAPIKeyPolicy)
+		mgmt.DELETE("/client-api-key-policies", s.mgmt.DeleteClientAPIKeyPolicy)
+		mgmt.POST("/client-api-key-policies/reset", s.mgmt.ResetClientAPIKeyPolicyUsage)
+		mgmt.GET("/concurrency-config", s.mgmt.GetConcurrencyConfig)
+		mgmt.PUT("/concurrency-config", s.mgmt.PutConcurrencyConfig)
+		mgmt.PATCH("/concurrency-config", s.mgmt.PatchConcurrencyConfig)
+		mgmt.GET("/client-api-key-concurrency-policies", s.mgmt.GetClientAPIKeyConcurrencyPolicies)
+		mgmt.PUT("/client-api-key-concurrency-policies", s.mgmt.PutClientAPIKeyConcurrencyPolicies)
+		mgmt.PATCH("/client-api-key-concurrency-policies", s.mgmt.PatchClientAPIKeyConcurrencyPolicies)
+		mgmt.DELETE("/client-api-key-concurrency-policies", s.mgmt.DeleteClientAPIKeyConcurrencyPolicies)
+		mgmt.GET("/quota-status", s.mgmt.GetQuotaStatus)
+		mgmt.GET("/concurrency-status", s.mgmt.GetConcurrencyStatus)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
 		mgmt.PUT("/gemini-api-key", s.mgmt.PutGeminiKeys)
@@ -873,13 +907,14 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	// Update request logger enabled state if it has changed
 	previousRequestLog := false
 	if oldCfg != nil {
-		previousRequestLog = oldCfg.RequestLog
+		previousRequestLog = requestLoggerEnabled(oldCfg)
 	}
-	if s.requestLogger != nil && (oldCfg == nil || previousRequestLog != cfg.RequestLog) {
+	currentRequestLog := requestLoggerEnabled(cfg)
+	if s.requestLogger != nil && (oldCfg == nil || previousRequestLog != currentRequestLog) {
 		if s.loggerToggle != nil {
-			s.loggerToggle(cfg.RequestLog)
+			s.loggerToggle(currentRequestLog)
 		} else if toggler, ok := s.requestLogger.(interface{ SetEnabled(bool) }); ok {
-			toggler.SetEnabled(cfg.RequestLog)
+			toggler.SetEnabled(currentRequestLog)
 		}
 	}
 
@@ -892,6 +927,11 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	if oldCfg == nil || oldCfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
 		usage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)
 	}
+
+	if errUpdateQuota := quota.DefaultManager().UpdateConfig(cfg, s.configFilePath); errUpdateQuota != nil {
+		log.WithError(errUpdateQuota).Warn("failed to reload quota manager config")
+	}
+	concurrency.DefaultManager().UpdateConfig(cfg)
 
 	if s.requestLogger != nil && (oldCfg == nil || oldCfg.ErrorLogsMaxFiles != cfg.ErrorLogsMaxFiles) {
 		if setter, ok := s.requestLogger.(interface{ SetErrorLogsMaxFiles(int) }); ok {
@@ -961,6 +1001,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	if s.mgmt != nil {
 		s.mgmt.SetConfig(cfg)
 		s.mgmt.SetAuthManager(s.handlers.AuthManager)
+		s.mgmt.SetConcurrencyManager(concurrency.DefaultManager())
 	}
 
 	// Notify Amp module only when Amp config has changed.

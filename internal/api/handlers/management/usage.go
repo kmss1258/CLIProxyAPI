@@ -25,10 +25,20 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 	var snapshot usage.StatisticsSnapshot
 	if h != nil && h.usageStats != nil {
 		snapshot = h.usageStats.Snapshot()
+		if shouldFallbackUsageSnapshot(snapshot) {
+			snapshot = h.sqliteUsageSnapshotOr(snapshot)
+		}
+	}
+	quotaStatuses := []any{}
+	if h != nil && h.quotaManager != nil && h.cfg != nil {
+		for _, status := range h.quotaManager.Statuses(h.cfg.APIKeys) {
+			quotaStatuses = append(quotaStatuses, status)
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"usage":           snapshot,
-		"failed_requests": snapshot.FailureCount,
+		"usage":                 snapshot,
+		"failed_requests":       snapshot.FailureCount,
+		"client_api_key_quotas": quotaStatuses,
 	})
 }
 
@@ -37,6 +47,9 @@ func (h *Handler) ExportUsageStatistics(c *gin.Context) {
 	var snapshot usage.StatisticsSnapshot
 	if h != nil && h.usageStats != nil {
 		snapshot = h.usageStats.Snapshot()
+		if shouldFallbackUsageSnapshot(snapshot) {
+			snapshot = h.sqliteUsageSnapshotOr(snapshot)
+		}
 	}
 	c.JSON(http.StatusOK, usageExportPayload{
 		Version:    1,
