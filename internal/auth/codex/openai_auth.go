@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,7 +26,34 @@ const (
 	TokenURL    = "https://auth.openai.com/oauth/token"
 	ClientID    = "app_EMoamEEZ73f0CkXaXp7hrann"
 	RedirectURI = "http://localhost:1455/auth/callback"
+	UsageURL    = "https://chatgpt.com/backend-api/wham/usage"
 )
+
+type UsageQuotaWindow struct {
+	PercentRemaining int    `json:"percent_remaining"`
+	ResetTimeISO     string `json:"reset_time_iso,omitempty"`
+}
+
+type UsageQuotaSnapshot struct {
+	Provider  string            `json:"provider"`
+	AccountID string            `json:"account_id,omitempty"`
+	Daily     *UsageQuotaWindow `json:"daily,omitempty"`
+	Weekly    *UsageQuotaWindow `json:"weekly,omitempty"`
+	Error     string            `json:"error,omitempty"`
+}
+
+type usageQuotaResponse struct {
+	RateLimit struct {
+		PrimaryWindow   *usageQuotaAPIRawWindow `json:"primary_window"`
+		SecondaryWindow *usageQuotaAPIRawWindow `json:"secondary_window"`
+	} `json:"rate_limit"`
+}
+
+type usageQuotaAPIRawWindow struct {
+	UsedPercent      float64 `json:"used_percent"`
+	ResetAt          any     `json:"reset_at"`
+	ResetAfterSecond any     `json:"reset_after_seconds"`
+}
 
 // CodexAuth handles the OpenAI OAuth2 authentication flow.
 // It manages the HTTP client and provides methods for generating authorization URLs,
@@ -55,6 +83,13 @@ func NewCodexAuthWithProxyURL(cfg *config.Config, proxyURL string) *CodexAuth {
 	return &CodexAuth{
 		httpClient: util.SetProxy(&sdkCfg, &http.Client{}),
 	}
+}
+
+func NewCodexAuthWithHTTPClient(client *http.Client) *CodexAuth {
+	if client == nil {
+		client = &http.Client{}
+	}
+	return &CodexAuth{httpClient: client}
 }
 
 // GenerateAuthURL creates the OAuth authorization URL with PKCE (Proof Key for Code Exchange).
@@ -255,6 +290,65 @@ func (o *CodexAuth) RefreshTokens(ctx context.Context, refreshToken string) (*Co
 	}, nil
 }
 
+func (o *CodexAuth) FetchUsageQuota(ctx context.Context, accessToken, expiresAt, explicitAccountID string) (*UsageQuotaSnapshot, error) {
+	snapshot := &UsageQuotaSnapshot{Provider: "openai"}
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		snapshot.Error = "Missing access token"
+		return snapshot, nil
+	}
+	if accountID := usageQuotaAccountID(accessToken, explicitAccountID); accountID != "" {
+		snapshot.AccountID = accountID
+	}
+	if usageQuotaExpired(expiresAt) {
+		snapshot.Error = "Token expired"
+		return snapshot, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, UsageURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create usage quota request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", "OpenCode-Quota-Toast/1.0")
+	if snapshot.AccountID != "" {
+		req.Header.Set("ChatGPT-Account-Id", snapshot.AccountID)
+	}
+
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		snapshot.Error = fmt.Sprintf("OpenAI API error: %v", err)
+		return snapshot, nil
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read usage quota response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		trimmed := strings.TrimSpace(string(body))
+		if len(trimmed) > 120 {
+			trimmed = trimmed[:120]
+		}
+		if trimmed == "" {
+			trimmed = resp.Status
+		}
+		snapshot.Error = fmt.Sprintf("OpenAI API error %d: %s", resp.StatusCode, trimmed)
+		return snapshot, nil
+	}
+
+	var decoded usageQuotaResponse
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, fmt.Errorf("failed to parse usage quota response: %w", err)
+	}
+	snapshot.Daily = usageQuotaWindow(decoded.RateLimit.PrimaryWindow)
+	snapshot.Weekly = usageQuotaWindow(decoded.RateLimit.SecondaryWindow)
+	return snapshot, nil
+}
+
 // CreateTokenStorage creates a new CodexTokenStorage from a CodexAuthBundle.
 // It populates the storage struct with token data, user information, and timestamps.
 func (o *CodexAuth) CreateTokenStorage(bundle *CodexAuthBundle) *CodexTokenStorage {
@@ -309,6 +403,104 @@ func isNonRetryableRefreshErr(err error) bool {
 	}
 	raw := strings.ToLower(err.Error())
 	return strings.Contains(raw, "refresh_token_reused")
+}
+
+func usageQuotaAccountID(accessToken, explicitAccountID string) string {
+	if accountID := strings.TrimSpace(explicitAccountID); accountID != "" {
+		return accountID
+	}
+	claims, err := ParseJWTToken(strings.TrimSpace(accessToken))
+	if err != nil || claims == nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.GetAccountID())
+}
+
+func usageQuotaExpired(expiresAt string) bool {
+	expiresAt = strings.TrimSpace(expiresAt)
+	if expiresAt == "" {
+		return false
+	}
+	parsed, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil {
+		return false
+	}
+	return parsed.Before(time.Now())
+}
+
+func usageQuotaWindow(window *usageQuotaAPIRawWindow) *UsageQuotaWindow {
+	if window == nil {
+		return nil
+	}
+	return &UsageQuotaWindow{
+		PercentRemaining: usageQuotaPercentRemaining(window.UsedPercent),
+		ResetTimeISO:     usageQuotaResetTime(window.ResetAt, window.ResetAfterSecond),
+	}
+}
+
+func usageQuotaPercentRemaining(usedPercent float64) int {
+	remaining := 100 - usedPercent
+	if math.IsNaN(remaining) || math.IsInf(remaining, 0) {
+		return 0
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	if remaining > 100 {
+		remaining = 100
+	}
+	return int(math.Round(remaining))
+}
+
+func usageQuotaResetTime(resetAt any, resetAfterSeconds any) string {
+	if ts, ok := usageQuotaAbsoluteTime(resetAt); ok {
+		return ts.Format(time.RFC3339)
+	}
+	if seconds, ok := usageQuotaNumber(resetAfterSeconds); ok {
+		return time.Now().Add(time.Duration(seconds * float64(time.Second))).UTC().Format(time.RFC3339)
+	}
+	return ""
+}
+
+func usageQuotaAbsoluteTime(value any) (time.Time, bool) {
+	numeric, ok := usageQuotaNumber(value)
+	if !ok || numeric <= 0 {
+		return time.Time{}, false
+	}
+	if numeric > 100000000000 {
+		return time.UnixMilli(int64(numeric)).UTC(), true
+	}
+	return time.Unix(int64(numeric), 0).UTC(), true
+}
+
+func usageQuotaNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case int32:
+		return float64(typed), true
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err == nil {
+			return parsed, true
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return 0, false
+		}
+		parsed, err := json.Number(trimmed).Float64()
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 // UpdateTokenStorage updates an existing CodexTokenStorage with new token data.
