@@ -72,6 +72,9 @@ CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
 see [MANAGEMENT_API.md](https://help.router-for.me/management/api)
 
+- In-repo reference for per-client output token quota policies: [docs/client-api-key-quota-policies.md](docs/client-api-key-quota-policies.md)
+- Use this reference for `client-api-key-policies`, `output-token-quota-reset-hours`, and `GET /v0/management/usage` quota inspection.
+
 ## Amp CLI Support
 
 CLIProxyAPI includes integrated support for [Amp CLI](https://ampcode.com) and Amp IDE extensions, enabling you to use your Google/ChatGPT/Claude OAuth subscriptions with Amp's coding tools:

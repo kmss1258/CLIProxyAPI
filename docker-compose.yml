@@ -26,3 +26,12 @@ services:
       - ${CLI_PROXY_AUTH_PATH:-./auths}:/root/.cli-proxy-api
       - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
     restart: unless-stopped
+
+  newt:
+    image: fosrl/newt
+    container_name: cli-proxy-newt
+    restart: unless-stopped
+    environment:
+      - PANGOLIN_ENDPOINT=https://pangolin.exusio.uk
+      - NEWT_ID=x3svwli302cb523
+      - NEWT_SECRET=tqn4wjr0p7p0atims1hxllzhd3l25idusz39p340sxouokrd

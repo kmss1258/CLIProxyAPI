@@ -72,6 +72,9 @@ CLIProxyAPIガイド：[https://help.router-for.me/](https://help.router-for.me/
 
 [MANAGEMENT_API.md](https://help.router-for.me/management/api)を参照
 
+- クライアントごとの出力トークン割り当てポリシーのリポジトリ内リファレンス: [docs/client-api-key-quota-policies.md](docs/client-api-key-quota-policies.md)
+- `client-api-key-policies`、`output-token-quota-reset-hours`、および `GET /v0/management/usage` での割り当て確認方法はこの文書を参照してください。
+
 ## Amp CLIサポート
 
 CLIProxyAPIは[Amp CLI](https://ampcode.com)およびAmp IDE拡張機能の統合サポートを含んでおり、Google/ChatGPT/ClaudeのOAuthサブスクリプションをAmpのコーディングツールで使用できます：

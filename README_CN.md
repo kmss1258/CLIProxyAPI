@@ -72,6 +72,9 @@ CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-fo
 
 请参见 [MANAGEMENT_API_CN.md](https://help.router-for.me/cn/management/api)
 
+- 仓库内的每客户端输出 token 配额策略参考文档： [docs/client-api-key-quota-policies.md](docs/client-api-key-quota-policies.md)
+- 如需了解 `client-api-key-policies`、`output-token-quota-reset-hours` 以及 `GET /v0/management/usage` 中的配额查看方式，请参见该文档。
+
 ## Amp CLI 支持
 
 CLIProxyAPI 已内置对 [Amp CLI](https://ampcode.com) 和 Amp IDE 扩展的支持，可让你使用自己的 Google/ChatGPT/Claude OAuth 订阅来配合 Amp 编码工具：

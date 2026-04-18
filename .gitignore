@@ -28,8 +28,10 @@ auths/*
 # Documentation
 docs/*
 AGENTS.md
+PRD.md
 CLAUDE.md
 GEMINI.md
+CODEX_LOGIN_INSTRUCTIONS.txt
 
 # Tooling metadata
 .vscode/*

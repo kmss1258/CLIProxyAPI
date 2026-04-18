@@ -14,22 +14,34 @@ go test ./... # Run all tests
 go test -v -run TestName ./path/to/pkg # Run single test
 go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRED after changes)
 ```
+- If the host shell does not have `go` / `gofmt` on `PATH`, run formatting/tests/build inside a temporary Docker builder instead of guessing paths. Verified fallback:
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/app" -w /app golang:1.26-alpine sh -lc 'mkdir -p /app/.cache/go-build /app/.cache/go && export GOCACHE=/app/.cache/go-build GOPATH=/app/.cache/go && /usr/local/go/bin/gofmt -w <files> && /usr/local/go/bin/go test ./... && /usr/local/go/bin/go build -o test-output ./cmd/server && rm test-output'
+```
+- When this repo is run via `docker compose`, `pull_policy: always` can overwrite a fresh local build with the published `eceasy/cli-proxy-api:latest` image. For local verification of source changes, use:
+```bash
+docker compose up -d --build --pull never cli-proxy-api
+```
 - Common flags: `--config <path>`, `--tui`, `--standalone`, `--local-model`, `--no-browser`, `--oauth-callback-port <port>`
 
 ## Config
-- Default config: `config.yaml` (template: `config.example.yaml`)
+- Runtime defaults to `./config.yaml` when `--config` is omitted; this repo commits `config.example.yaml` as the template and does not normally commit a concrete `config.yaml`
 - `.env` is auto-loaded from the working directory
 - Auth material defaults under `auths/`
+- Management access is controlled by `remote-management.secret-key`; remote access also requires `remote-management.allow-remote: true`
+- `remote-management.disable-control-panel` and `remote-management.disable-auto-update-panel` control the bundled management UI asset behavior
 - Storage backends: file-based default; optional Postgres/git/object store (`PGSTORE_*`, `GITSTORE_*`, `OBJECTSTORE_*`)
 
 ## Architecture
 - `cmd/server/` — Server entrypoint
 - `internal/api/` — Gin HTTP API (routes, middleware, modules)
+- `internal/api/handlers/management/` — Management API handlers for config, API keys, logs, usage stats, provider config, and Amp settings
 - `internal/api/modules/amp/` — Amp integration (Amp-style routes + reverse proxy)
 - `internal/thinking/` — Main thinking/reasoning pipeline. `ApplyThinking()` (apply.go) parses suffixes (`suffix.go`, suffix overrides body), normalizes config to canonical `ThinkingConfig` (`types.go`), normalizes and validates centrally (`validate.go`/`convert.go`), then applies provider-specific output via `ProviderApplier`. Do not break this "canonical representation → per-provider translation" architecture.
 - `internal/runtime/executor/` — Per-provider runtime executors (incl. Codex WebSocket)
 - `internal/translator/` — Provider protocol translators (and shared `common`)
 - `internal/registry/` — Model registry + remote updater (`StartModelsUpdater`); `--local-model` disables remote updates
+- `sdk/cliproxy/auth/` — Credential runtime state, cooldown/quota tracking, refresh scheduling, and selection strategies (`round-robin`, `fill-first`)
 - `internal/store/` — Storage implementations and secret resolution
 - `internal/managementasset/` — Config snapshots and management assets
 - `internal/cache/` — Request signature caching
@@ -40,6 +52,12 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - `sdk/cliproxy/` — Embeddable SDK entry (service/builder/watchers/pipeline)
 - `test/` — Cross-module integration tests
 
+## Capability Notes
+- Top-level `api-keys` authenticate clients to this proxy. The inspected code tracks usage and token totals per client API key in memory and exposes them via the management API, but it does **not** expose a verified per-client-API-key token quota/cap enforcement feature.
+- Quota handling in this repo is primarily credential/provider cooldown and failover behavior (`quota-exceeded`, auth/model cooldown state), not a configurable "this API key may spend N tokens" policy.
+- Subscription-backed OAuth/account flows are supported for built-in providers such as Codex/OpenAI, Claude, Gemini, iFlow, Amp, Antigravity, and Kimi where corresponding auth/runtime modules exist.
+- `openai-compatibility` supports arbitrary OpenAI-compatible upstreams configured with `base-url` + API keys. That means a nanoGPT-like service can work **if** it exposes a compatible upstream API, but there is no explicit first-class `nanoGPT` integration in this codebase.
+
 ## Code Conventions
 - Keep changes small and simple (KISS)
 - Comments in English only
@@ -49,6 +67,7 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - As a rule, do not make standalone changes to `internal/translator/`. You may modify it only as part of broader changes elsewhere.
 - If a task requires changing only `internal/translator/`, run `gh repo view --json viewerPermission -q .viewerPermission` to confirm you have `WRITE`, `MAINTAIN`, or `ADMIN`. If you do, you may proceed; otherwise, file a GitHub issue including the goal, rationale, and the intended implementation code, then stop further work.
 - `internal/runtime/executor/` should contain executors and their unit tests only. Place any helper/supporting files under `internal/runtime/executor/helps/`.
+- If a change affects quota dashboard behavior, quota payloads, quota page copy, or key/auth visibility for the dashboard, update `internal/api/assets/quota.html` as part of the same change and verify the served `/quota.html` page still matches the new behavior.
 - Follow `gofmt`; keep imports goimports-style; wrap errors with context where helpful
 - Do not use `log.Fatal`/`log.Fatalf` (terminates the process); prefer returning errors and logging via logrus
 - Shadowed variables: use method suffix (`errStart := server.Start()`)
