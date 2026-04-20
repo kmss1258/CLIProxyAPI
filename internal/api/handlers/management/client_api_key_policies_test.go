@@ -242,11 +242,133 @@ func TestPatchClientAPIKeyPolicyRejectsEmptyAliasOnlyCreate(t *testing.T) {
 	c, _ := gin.CreateTestContext(rr)
 	c.Request = req
 	h.PatchClientAPIKeyPolicy(c)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 no-op, got %d body=%s", rr.Code, rr.Body.String())
 	}
 	if len(h.cfg.ClientAPIKeyPolicies) != 0 {
 		t.Fatalf("expected no policies to be created, got %#v", h.cfg.ClientAPIKeyPolicies)
+	}
+}
+
+func TestPatchClientAPIKeyPolicyTreatsBlankSelectedAuthCreateAsNoOp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("api-keys:\n  - known-key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	h := NewHandler(&config.Config{SDKConfig: config.SDKConfig{APIKeys: []string{"known-key"}}}, configPath, nil)
+	req := httptest.NewRequest(http.MethodPatch, "/v0/management/client-api-key-policies", bytes.NewBufferString(`{"match":"known-key","value":{"api-key":"known-key","selected-auth-index":"  "}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.PatchClientAPIKeyPolicy(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(h.cfg.ClientAPIKeyPolicies) != 0 {
+		t.Fatalf("expected no policies to be created, got %#v", h.cfg.ClientAPIKeyPolicies)
+	}
+}
+
+func TestPatchClientAPIKeyPolicyCreatesSelectedAuthOnlyPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("api-keys:\n  - known-key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	h := NewHandler(&config.Config{SDKConfig: config.SDKConfig{APIKeys: []string{"known-key"}}}, configPath, nil)
+	req := httptest.NewRequest(http.MethodPatch, "/v0/management/client-api-key-policies", bytes.NewBufferString(`{"match":"known-key","value":{"api-key":"known-key","selected-auth-index":"auth-1"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.PatchClientAPIKeyPolicy(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(h.cfg.ClientAPIKeyPolicies) != 1 {
+		t.Fatalf("expected one policy, got %d", len(h.cfg.ClientAPIKeyPolicies))
+	}
+	if got := h.cfg.ClientAPIKeyPolicies[0].SelectedAuthIndex; got != "auth-1" {
+		t.Fatalf("expected selected auth index to persist, got %q", got)
+	}
+}
+
+func TestPatchClientAPIKeyPolicyUpdatesSelectedAuthIndex(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("api-keys:\n  - known-key\nclient-api-key-policies:\n  - api-key: known-key\n    alias: Laptop\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	h := NewHandler(&config.Config{SDKConfig: config.SDKConfig{
+		APIKeys:              []string{"known-key"},
+		ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{APIKey: "known-key", Alias: "Laptop"}},
+	}}, configPath, nil)
+	req := httptest.NewRequest(http.MethodPatch, "/v0/management/client-api-key-policies", bytes.NewBufferString(`{"match":"known-key","value":{"selected-auth-index":"auth-2"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.PatchClientAPIKeyPolicy(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := h.cfg.ClientAPIKeyPolicies[0].SelectedAuthIndex; got != "auth-2" {
+		t.Fatalf("expected selected auth index to update, got %q", got)
+	}
+}
+
+func TestPatchClientAPIKeyPolicyClearsSelectedAuthIndex(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("api-keys:\n  - known-key\nclient-api-key-policies:\n  - api-key: known-key\n    alias: Laptop\n    selected-auth-index: auth-1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	h := NewHandler(&config.Config{SDKConfig: config.SDKConfig{
+		APIKeys:              []string{"known-key"},
+		ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{APIKey: "known-key", Alias: "Laptop", SelectedAuthIndex: "auth-1"}},
+	}}, configPath, nil)
+	req := httptest.NewRequest(http.MethodPatch, "/v0/management/client-api-key-policies", bytes.NewBufferString(`{"match":"known-key","value":{"selected-auth-index":""}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.PatchClientAPIKeyPolicy(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := h.cfg.ClientAPIKeyPolicies[0].SelectedAuthIndex; got != "" {
+		t.Fatalf("expected selected auth index to clear, got %q", got)
+	}
+}
+
+func TestPatchClientAPIKeyPolicyRemovesSelectedAuthOnlyPolicyWhenCleared(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("api-keys:\n  - known-key\nclient-api-key-policies:\n  - api-key: known-key\n    selected-auth-index: auth-1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	h := NewHandler(&config.Config{SDKConfig: config.SDKConfig{
+		APIKeys:              []string{"known-key"},
+		ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{APIKey: "known-key", SelectedAuthIndex: "auth-1"}},
+	}}, configPath, nil)
+	req := httptest.NewRequest(http.MethodPatch, "/v0/management/client-api-key-policies", bytes.NewBufferString(`{"match":"known-key","value":{"selected-auth-index":""}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.PatchClientAPIKeyPolicy(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(h.cfg.ClientAPIKeyPolicies) != 0 {
+		t.Fatalf("expected selected-auth-only policy to be removed, got %#v", h.cfg.ClientAPIKeyPolicies)
 	}
 }
 

@@ -109,6 +109,181 @@ func TestGetQuotaStatusReturnsQuotaUsageAndAuthFiles(t *testing.T) {
 	}
 }
 
+func TestGetQuotaStatusIncludesSelectedAuthMetadataOnQuotaRow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auths")
+	if err := os.MkdirAll(authDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	authPath := filepath.Join(authDir, "codex-picked@example.com-plus.json")
+	if err := os.WriteFile(authPath, []byte(`{"type":"codex","email":"picked@example.com","disabled":false}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() auth error = %v", err)
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth := &coreauth.Auth{
+		ID:       "auth-picked",
+		Provider: "codex",
+		FileName: filepath.Base(authPath),
+		Status:   coreauth.StatusActive,
+		Attributes: map[string]string{
+			"path": authPath,
+		},
+		Metadata: map[string]any{
+			"email": "picked@example.com",
+		},
+	}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	selectedAuthIndex := auth.EnsureIndex()
+	cfg := &config.Config{SDKConfig: config.SDKConfig{
+		APIKeys: []string{"k1"},
+		ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{
+			APIKey:            "k1",
+			SelectedAuthIndex: selectedAuthIndex,
+		}},
+	}, AuthDir: authDir}
+	h := NewHandlerWithoutConfigFilePath(cfg, manager)
+	quotaManager := quota.NewManager()
+	if err := quotaManager.UpdateConfig(cfg, filepath.Join(tmpDir, "config.yaml")); err != nil {
+		t.Fatalf("quotaManager.UpdateConfig() error = %v", err)
+	}
+	h.SetQuotaManager(quotaManager)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/quota-status", nil)
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.GetQuotaStatus(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		ClientAPIKeyQuotas []map[string]any `json:"client_api_key_quotas"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v body=%s", err, rr.Body.String())
+	}
+	if len(payload.ClientAPIKeyQuotas) != 1 {
+		t.Fatalf("expected one quota row, got %#v", payload.ClientAPIKeyQuotas)
+	}
+	row := payload.ClientAPIKeyQuotas[0]
+	if got := row["selected_auth_index"]; got != selectedAuthIndex {
+		t.Fatalf("expected selected_auth_index %q, got %#v", selectedAuthIndex, got)
+	}
+	if got := row["selected_auth_label"]; got != "picked@example.com" {
+		t.Fatalf("expected selected_auth_label picked@example.com, got %#v", got)
+	}
+	if got := row["selected_auth_provider"]; got != "codex" {
+		t.Fatalf("expected selected_auth_provider codex, got %#v", got)
+	}
+	if got := row["selected_auth_missing"]; got != false {
+		t.Fatalf("expected selected_auth_missing false, got %#v", got)
+	}
+}
+
+func TestGetQuotaStatusMarksDisabledSelectedAuthOnQuotaRow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auths")
+	if err := os.MkdirAll(authDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	authPath := filepath.Join(authDir, "codex-disabled@example.com-plus.json")
+	if err := os.WriteFile(authPath, []byte(`{"type":"codex","email":"disabled@example.com","disabled":true}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() auth error = %v", err)
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth := &coreauth.Auth{
+		ID:       "auth-disabled",
+		Provider: "codex",
+		FileName: filepath.Base(authPath),
+		Status:   coreauth.StatusDisabled,
+		Disabled: true,
+		Attributes: map[string]string{
+			"path": authPath,
+		},
+		Metadata: map[string]any{
+			"email": "disabled@example.com",
+		},
+	}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	selectedAuthIndex := auth.EnsureIndex()
+	cfg := &config.Config{SDKConfig: config.SDKConfig{
+		APIKeys: []string{"k1"},
+		ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{
+			APIKey:            "k1",
+			SelectedAuthIndex: selectedAuthIndex,
+		}},
+	}, AuthDir: authDir}
+	h := NewHandlerWithoutConfigFilePath(cfg, manager)
+	quotaManager := quota.NewManager()
+	if err := quotaManager.UpdateConfig(cfg, filepath.Join(tmpDir, "config.yaml")); err != nil {
+		t.Fatalf("quotaManager.UpdateConfig() error = %v", err)
+	}
+	h.SetQuotaManager(quotaManager)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/quota-status", nil)
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.GetQuotaStatus(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		ClientAPIKeyQuotas []map[string]any `json:"client_api_key_quotas"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v body=%s", err, rr.Body.String())
+	}
+	if len(payload.ClientAPIKeyQuotas) != 1 {
+		t.Fatalf("expected one quota row, got %#v", payload.ClientAPIKeyQuotas)
+	}
+	if got := payload.ClientAPIKeyQuotas[0]["selected_auth_disabled"]; got != true {
+		t.Fatalf("expected selected_auth_disabled true, got %#v", got)
+	}
+}
+
+func TestGetQuotaStatusMarksMissingSelectedAuthOnQuotaRow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	authDir := t.TempDir()
+	cfg := &config.Config{SDKConfig: config.SDKConfig{
+		APIKeys: []string{"k1"},
+		ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{
+			APIKey:            "k1",
+			SelectedAuthIndex: "missing-auth-index",
+		}},
+	}, AuthDir: authDir}
+	h := NewHandlerWithoutConfigFilePath(cfg, nil)
+	quotaManager := quota.NewManager()
+	if err := quotaManager.UpdateConfig(cfg, filepath.Join(authDir, "config.yaml")); err != nil {
+		t.Fatalf("quotaManager.UpdateConfig() error = %v", err)
+	}
+	h.SetQuotaManager(quotaManager)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/quota-status", nil)
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.GetQuotaStatus(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		ClientAPIKeyQuotas []map[string]any `json:"client_api_key_quotas"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v body=%s", err, rr.Body.String())
+	}
+	if len(payload.ClientAPIKeyQuotas) != 1 {
+		t.Fatalf("expected one quota row, got %#v", payload.ClientAPIKeyQuotas)
+	}
+	if got := payload.ClientAPIKeyQuotas[0]["selected_auth_missing"]; got != true {
+		t.Fatalf("expected selected_auth_missing true, got %#v", got)
+	}
+}
+
 func TestGetQuotaStatusEnrichesAuthFilesWithOpenAIQuota(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tmpDir := t.TempDir()

@@ -122,6 +122,7 @@ func (h *Handler) buildQuotaStatusPayload(viewer *quotaViewer) (gin.H, error) {
 	authUsage := buildAuthUsage(snapshot)
 	enrichAuthFilesWithUsage(authFiles, authUsage)
 	h.enrichAuthFilesWithOpenAIQuota(authFiles)
+	quotaStatuses = h.enrichQuotaStatusesWithSelectedAuth(quotaStatuses, authFiles)
 
 	return gin.H{
 		"usage":                 usageSnapshot,
@@ -238,6 +239,120 @@ func (h *Handler) clientAPIKeyAliases() map[string]string {
 		aliases[key] = alias
 	}
 	return aliases
+}
+
+func (h *Handler) enrichQuotaStatusesWithSelectedAuth(statuses []any, authFiles []gin.H) []any {
+	if h == nil || h.cfg == nil || len(statuses) == 0 {
+		return statuses
+	}
+	selectedByKey := make(map[string]string)
+	for _, item := range h.cfg.ClientAPIKeyPolicies {
+		key := strings.TrimSpace(item.APIKey)
+		selectedAuthIndex := strings.TrimSpace(item.SelectedAuthIndex)
+		if key == "" || selectedAuthIndex == "" {
+			continue
+		}
+		selectedByKey[key] = selectedAuthIndex
+	}
+	if len(selectedByKey) == 0 {
+		return statuses
+	}
+	authByIndex := make(map[string]gin.H, len(authFiles))
+	for _, entry := range authFiles {
+		index := strings.TrimSpace(stringFromAny(entry["auth_index"]))
+		if index == "" {
+			continue
+		}
+		authByIndex[index] = entry
+	}
+	enriched := make([]any, 0, len(statuses))
+	for _, item := range statuses {
+		row := quotaStatusRow(item)
+		if row == nil {
+			enriched = append(enriched, item)
+			continue
+		}
+		apiKey := strings.TrimSpace(stringFromAny(row["api_key"]))
+		selectedAuthIndex := selectedByKey[apiKey]
+		if selectedAuthIndex == "" {
+			enriched = append(enriched, row)
+			continue
+		}
+		row["selected_auth_index"] = selectedAuthIndex
+		if authEntry, ok := authByIndex[selectedAuthIndex]; ok {
+			row["selected_auth_label"] = selectedAuthLabel(authEntry)
+			row["selected_auth_provider"] = stringFromAny(authEntry["provider"])
+			row["selected_auth_disabled"] = boolFromAny(authEntry["disabled"])
+			row["selected_auth_missing"] = false
+		} else {
+			row["selected_auth_label"] = ""
+			row["selected_auth_provider"] = ""
+			row["selected_auth_disabled"] = false
+			row["selected_auth_missing"] = true
+		}
+		enriched = append(enriched, row)
+	}
+	return enriched
+}
+
+func quotaStatusRow(item any) gin.H {
+	switch typed := item.(type) {
+	case gin.H:
+		row := gin.H{}
+		for key, value := range typed {
+			row[key] = value
+		}
+		return row
+	case quota.Status:
+		row := gin.H{
+			"api_key":                        typed.APIKey,
+			"alias":                          typed.Alias,
+			"output_token_quota":             typed.OutputTokenQuota,
+			"output_token_quota_reset_hours": typed.OutputTokenQuotaResetHours,
+			"used_output_tokens":             typed.UsedOutputTokens,
+			"remaining_output_tokens":        typed.Remaining,
+			"window_remaining_seconds":       typed.WindowRemainingSeconds,
+			"unlimited":                      typed.Unlimited,
+		}
+		if typed.WindowStartedAt != nil {
+			row["window_started_at"] = typed.WindowStartedAt
+		}
+		if typed.WindowEndsAt != nil {
+			row["window_ends_at"] = typed.WindowEndsAt
+		}
+		return row
+	default:
+		return nil
+	}
+}
+
+func selectedAuthLabel(entry gin.H) string {
+	return firstNonEmptyQuotaString(
+		stringFromAny(entry["label"]),
+		stringFromAny(entry["email"]),
+		stringFromAny(entry["account"]),
+		stringFromAny(entry["name"]),
+		stringFromAny(entry["id"]),
+	)
+}
+
+func firstNonEmptyQuotaString(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func boolFromAny(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	default:
+		return false
+	}
 }
 
 func (h *Handler) enrichAuthFilesWithOpenAIQuota(authFiles []gin.H) {

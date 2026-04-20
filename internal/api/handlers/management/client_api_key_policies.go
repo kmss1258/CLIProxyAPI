@@ -97,6 +97,7 @@ func (h *Handler) PatchClientAPIKeyPolicy(c *gin.Context) {
 	type valuePatch struct {
 		APIKey                      *string `json:"api-key"`
 		Alias                       *string `json:"alias"`
+		SelectedAuthIndex           *string `json:"selected-auth-index"`
 		OutputTokenQuota            *int64  `json:"output-token-quota"`
 		OutputTokenQuotaResetHours  *int    `json:"output-token-quota-reset-hours"`
 		LegacyOutputTokenQuotaReset *string `json:"output-token-quota-reset"`
@@ -137,6 +138,9 @@ func (h *Handler) PatchClientAPIKeyPolicy(c *gin.Context) {
 		if body.Value.Alias != nil {
 			entry.Alias = strings.TrimSpace(*body.Value.Alias)
 		}
+		if body.Value.SelectedAuthIndex != nil {
+			entry.SelectedAuthIndex = strings.TrimSpace(*body.Value.SelectedAuthIndex)
+		}
 		if body.Value.OutputTokenQuota != nil && *body.Value.OutputTokenQuota > 0 {
 			entry.OutputTokenQuota = *body.Value.OutputTokenQuota
 		}
@@ -153,7 +157,7 @@ func (h *Handler) PatchClientAPIKeyPolicy(c *gin.Context) {
 			entry.Concurrency = *body.Value.Concurrency
 		}
 		if !clientAPIKeyPolicyHasMeaningfulConfig(entry) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "alias, output-token-quota, or concurrency is required when creating a policy"})
+			c.JSON(http.StatusOK, gin.H{"message": "no policy changes to apply"})
 			return
 		}
 		normalizedEntry := config.NormalizeClientAPIKeyPolicies([]config.ClientAPIKeyPolicy{entry})
@@ -174,6 +178,9 @@ func (h *Handler) PatchClientAPIKeyPolicy(c *gin.Context) {
 	}
 	if body.Value.Alias != nil {
 		entry.Alias = strings.TrimSpace(*body.Value.Alias)
+	}
+	if body.Value.SelectedAuthIndex != nil {
+		entry.SelectedAuthIndex = strings.TrimSpace(*body.Value.SelectedAuthIndex)
 	}
 	if body.Value.OutputTokenQuota != nil {
 		entry.OutputTokenQuota = *body.Value.OutputTokenQuota
@@ -211,6 +218,9 @@ func (h *Handler) PatchClientAPIKeyPolicy(c *gin.Context) {
 
 func clientAPIKeyPolicyHasMeaningfulConfig(item config.ClientAPIKeyPolicy) bool {
 	if strings.TrimSpace(item.Alias) != "" {
+		return true
+	}
+	if strings.TrimSpace(item.SelectedAuthIndex) != "" {
 		return true
 	}
 	if item.OutputTokenQuota > 0 {
