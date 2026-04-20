@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>쿼터 운영 콘솔</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -348,6 +349,7 @@
     .sections { display: flex; flex-direction: column; gap: 32px; }
     .panel { padding: 24px; background: var(--surface); }
     .panel-head { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+    #concurrency-panel-toggle { cursor: pointer; }
     .section-note { margin-top: 8px; font-size: 0.95rem; }
 
     .quota-grid, .auth-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
@@ -822,10 +824,11 @@
       </section>
 
       <section id="concurrency-panel" class="panel" hidden>
-        <div class="panel-head">
+        <div id="concurrency-panel-toggle" class="panel-head" role="button" tabindex="0" aria-expanded="false" aria-controls="concurrency-panel-body">
           <h2>API 키 관리 고급 설정</h2>
           <p class="section-note">관리 키에서만 보입니다. API 키 운영의 고급 단계로, 동시 요청 기본값과 경로 제한, 특정 API 키 override, 현재 처리 상태를 한곳에서 함께 관리합니다.</p>
         </div>
+        <div id="concurrency-panel-body" hidden>
         <div id="concurrency-overview" class="compact-admin-stat-grid"></div>
         <div class="compact-admin-stack" style="margin-top:16px;">
           <section class="compact-admin-panel" aria-label="동시 요청 기본 설정">
@@ -901,6 +904,7 @@
             <div id="concurrency-upstream-list" class="compact-admin-list"></div>
           </section>
         </div>
+        </div>
       </section>
 
       <section id="auth-panel" class="panel">
@@ -929,6 +933,8 @@
       var apiKeyCreateButton = document.getElementById("api-key-create-button");
       var authPanel = document.getElementById("auth-panel");
       var concurrencyPanel = document.getElementById("concurrency-panel");
+      var concurrencyPanelToggle = document.getElementById("concurrency-panel-toggle");
+      var concurrencyPanelBody = document.getElementById("concurrency-panel-body");
       var concurrencyOverview = document.getElementById("concurrency-overview");
       var concurrencyEnabledBadge = document.getElementById("concurrency-enabled-badge");
       var concurrencyGlobalCurrentBadge = document.getElementById("concurrency-global-current-badge");
@@ -963,6 +969,7 @@
       var concurrencyState = createEmptyConcurrencyState();
       var concurrencyDraft = createEmptyConcurrencyDraft();
       var currentQuotaRows = [];
+      var currentAuthFiles = [];
 
       function el(tag, className, text) {
         var node = document.createElement(tag);
@@ -1341,6 +1348,15 @@
         node.textContent = text || "";
       }
 
+      function setConcurrencyPanelExpanded(expanded) {
+        if (concurrencyPanelBody) concurrencyPanelBody.hidden = !expanded;
+        if (concurrencyPanelToggle) concurrencyPanelToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      }
+
+      function toggleConcurrencyPanelExpanded() {
+        setConcurrencyPanelExpanded(!concurrencyPanelBody || concurrencyPanelBody.hidden);
+      }
+
       function renderCompactStat(label, value, note) {
         var card = el("div", "compact-admin-stat");
         card.appendChild(el("span", "label", label));
@@ -1449,6 +1465,85 @@
         if (hours === 168) return "Weekly 사용률";
         if (hours > 0) return "Rolling " + hours + "h 사용률";
         return "누적 사용률";
+      }
+
+      function getAuthSelectionLabel(item) {
+        return String((item && (item.email || item.account || item.label || item.name || item.id || item.auth_index)) || "").trim();
+      }
+
+      function listSelectableAuthFiles() {
+        var seen = {};
+        var rows = Array.isArray(currentAuthFiles) ? currentAuthFiles : [];
+        return rows.reduce(function (list, item) {
+          var authIndex = String(item && item.auth_index || "").trim();
+          var label;
+          var provider;
+          var optionLabel;
+          if (!authIndex || seen[authIndex]) return list;
+          seen[authIndex] = true;
+          label = getAuthSelectionLabel(item) || authIndex;
+          provider = String((item && (item.provider || item.type)) || "").trim();
+          optionLabel = authIndex + " · " + (provider ? provider + " · " : "") + label;
+          if (item && item.disabled) optionLabel += " · 비활성화";
+          list.push({
+            authIndex: authIndex,
+            label: label,
+            provider: provider,
+            disabled: !!(item && item.disabled),
+            optionLabel: optionLabel
+          });
+          return list;
+        }, []);
+      }
+
+      function findSelectableAuthFile(authIndex) {
+        var target = String(authIndex || "").trim();
+        var options;
+        var i;
+        if (!target) return null;
+        options = listSelectableAuthFiles();
+        for (i = 0; i < options.length; i += 1) {
+          if (options[i].authIndex === target) return options[i];
+        }
+        return null;
+      }
+
+      function getQuotaSelectedAuthState(item) {
+        var selectedAuthIndex = String(item && item.selected_auth_index || "").trim();
+        var selectedOption = findSelectableAuthFile(selectedAuthIndex);
+        var selectedAuthLabel = String(item && item.selected_auth_label || (selectedOption && selectedOption.label) || "").trim();
+        var selectedAuthProvider = String(item && item.selected_auth_provider || (selectedOption && selectedOption.provider) || "").trim();
+        var selectedAuthDisabled = !!(item && item.selected_auth_disabled) || !!(selectedOption && selectedOption.disabled);
+        var selectedAuthMissing = !!(item && item.selected_auth_missing) || (!!selectedAuthIndex && !selectedOption);
+        var currentLabel = [selectedAuthProvider, selectedAuthLabel].filter(Boolean).join(" · ");
+        var warningText = "";
+        var warningTone = "neutral";
+        var summaryTone = "neutral";
+
+        if (!currentLabel && selectedAuthIndex) currentLabel = selectedAuthIndex;
+        if (selectedAuthMissing) {
+          warningText = "현재 지정된 연동 계정을 찾을 수 없습니다. 기존 모드로 저장하거나 다른 계정을 선택하세요.";
+          warningTone = "bad";
+          summaryTone = "bad";
+        } else if (selectedAuthDisabled) {
+          warningText = "현재 지정된 연동 계정이 비활성화 상태입니다. 다른 계정으로 바꾸거나 기존 모드로 저장하세요.";
+          warningTone = "warn";
+          summaryTone = "warn";
+        }
+
+        return {
+          selectedAuthIndex: selectedAuthIndex,
+          selectedAuthLabel: selectedAuthLabel,
+          selectedAuthProvider: selectedAuthProvider,
+          selectedAuthDisabled: selectedAuthDisabled,
+          selectedAuthMissing: selectedAuthMissing,
+          currentLabel: currentLabel,
+          hasSelection: !!selectedAuthIndex,
+          optionFound: !!selectedOption,
+          summaryTone: summaryTone,
+          warningText: warningText,
+          warningTone: warningTone
+        };
       }
 
       function quotaPercent(item) {
@@ -1578,6 +1673,94 @@
         return panel;
       }
 
+      function renderQuotaCardSelectedAuth(item) {
+        var apiKey;
+        var state;
+        var options;
+        var panel;
+        var head;
+        var title;
+        var summary;
+        var controls;
+        var selectField;
+        var selectInput;
+        var existingOption;
+        var currentOption;
+        var note;
+        var saveButton;
+        var warningNode;
+        if (!viewerState.can_manage) return null;
+        apiKey = String(item && item.api_key || "").trim();
+        state = getQuotaSelectedAuthState(item);
+        options = listSelectableAuthFiles();
+        panel = el("section", "compact-admin-panel quota-admin-panel");
+        panel.setAttribute("aria-label", (apiKey || "API 키") + " 선택 계정 설정");
+
+        head = el("div", "quota-admin-head");
+        title = el("div", "compact-admin-title");
+        title.appendChild(el("h3", "", "선택 계정 지정"));
+        title.appendChild(el("p", "compact-admin-inline-note", state.hasSelection ? "현재 이 API 키는 지정한 연동 계정을 우선 사용합니다. 빈 값으로 저장하면 기존 모드로 돌아갑니다." : "현재는 기존 모드로 동작합니다. 특정 연동 계정만 쓰고 싶을 때 여기서 바로 저장하세요."));
+        head.appendChild(title);
+
+        summary = el("div", "quota-admin-summary");
+        summary.appendChild(createBadge(state.hasSelection ? "선택됨 " + state.selectedAuthIndex : "기존 모드", state.summaryTone));
+        if (state.hasSelection && state.currentLabel && state.currentLabel !== state.selectedAuthIndex) {
+          summary.appendChild(createBadge(state.currentLabel, "neutral"));
+        }
+        if (state.warningText) {
+          summary.appendChild(createBadge(state.selectedAuthMissing ? "연결 대상 없음" : "비활성 계정", state.warningTone));
+        }
+        head.appendChild(summary);
+        panel.appendChild(head);
+
+        controls = el("div", "compact-admin-row compact-admin-settings quota-admin-controls");
+        selectField = el("div", "compact-admin-field");
+        selectField.appendChild(el("label", "", "연동 계정"));
+        selectInput = document.createElement("select");
+        selectInput.className = "input";
+        selectInput.setAttribute("aria-label", (apiKey || "API 키") + " 선택 계정");
+
+        existingOption = document.createElement("option");
+        existingOption.value = "";
+        existingOption.textContent = "기존 모드 유지";
+        selectInput.appendChild(existingOption);
+
+        if (state.hasSelection && !state.optionFound) {
+          currentOption = document.createElement("option");
+          currentOption.value = state.selectedAuthIndex;
+          currentOption.textContent = state.selectedAuthIndex + " · 현재 지정값" + (state.selectedAuthMissing ? " · 목록 없음" : "");
+          selectInput.appendChild(currentOption);
+        }
+
+        options.forEach(function (option) {
+          var optionNode = document.createElement("option");
+          optionNode.value = option.authIndex;
+          optionNode.textContent = option.optionLabel;
+          selectInput.appendChild(optionNode);
+        });
+        selectInput.value = state.hasSelection ? state.selectedAuthIndex : "";
+        selectField.appendChild(selectInput);
+        controls.appendChild(selectField);
+
+        note = el("p", "compact-admin-settings-note", "빈 값으로 저장하면 기존 모드로 돌아갑니다. 목록은 auth_index 기준으로 보여줍니다.");
+        controls.appendChild(note);
+
+        saveButton = el("button", "button", "선택 저장");
+        saveButton.type = "button";
+        saveButton.addEventListener("click", function () {
+          saveAPIKeySelectedAuth(apiKey, selectInput.value, saveButton);
+        });
+        controls.appendChild(saveButton);
+        panel.appendChild(controls);
+
+        if (state.warningText) {
+          warningNode = el("div", "danger-note", state.warningText);
+          panel.appendChild(warningNode);
+        }
+
+        return panel;
+      }
+
       function renderQuotas(quotas) {
         currentQuotaRows = Array.isArray(quotas) ? quotas.slice() : [];
         clearNode(quotaSection);
@@ -1593,6 +1776,7 @@
           var card = el("article", "quota-card");
           var barShell;
           var barFill;
+          var selectedAuthPanelNode;
           var concurrencyPanelNode;
           var aliasRow;
           var aliasInput;
@@ -1632,6 +1816,9 @@
           card.appendChild(metrics);
 
           if (viewerState.can_manage) {
+            selectedAuthPanelNode = renderQuotaCardSelectedAuth(item);
+            if (selectedAuthPanelNode) card.appendChild(selectedAuthPanelNode);
+
             concurrencyPanelNode = renderQuotaCardConcurrency(item.api_key);
             if (concurrencyPanelNode) card.appendChild(concurrencyPanelNode);
 
@@ -1812,6 +1999,52 @@
         } catch (error) {
           setActionToast("별칭 저장 실패: " + (error && error.message ? error.message : "unknown error"));
           setStatus("error", error && error.message ? error.message : "별칭 저장 실패");
+        }
+      }
+
+      async function saveAPIKeySelectedAuth(apiKey, selectedAuthIndex, button) {
+        var key = keyInput.value.trim();
+        var targetAPIKey = String(apiKey || "").trim();
+        var targetSelectedAuthIndex = String(selectedAuthIndex || "").trim();
+        var previousDisabled = button ? button.disabled : false;
+        var response;
+        var text;
+        var data;
+        if (!key || !viewerState.can_manage) {
+          setStatus("error", "관리 권한이 있는 키에서만 선택 계정을 저장할 수 있습니다.");
+          keyInput.focus();
+          return;
+        }
+        if (!targetAPIKey) {
+          setStatus("error", "대상 API 키를 찾지 못했습니다.");
+          return;
+        }
+        setActionToast(targetSelectedAuthIndex ? "선택 계정을 저장하는 중입니다…" : "기존 모드로 되돌리는 중입니다…");
+        if (button) button.disabled = true;
+        try {
+          response = await fetch("/v0/management/client-api-key-policies", {
+            method: "PATCH",
+            headers: {
+              "Accept": "application/json",
+              "Authorization": "Bearer " + key,
+              "X-Management-Key": key,
+              "Content-Type": "application/json"
+            },
+            cache: "no-store",
+            credentials: "same-origin",
+            body: JSON.stringify({ match: targetAPIKey, value: { "api-key": targetAPIKey, "selected-auth-index": targetSelectedAuthIndex } })
+          });
+          text = await response.text();
+          data = null;
+          try { data = text ? JSON.parse(text) : {}; } catch (e) { data = null; }
+          if (!response.ok) throw new Error((data && data.error) || (text || ("HTTP " + response.status)));
+          setActionToast(targetSelectedAuthIndex ? "선택 계정 저장 완료: " + targetAPIKey : "기존 모드 저장 완료: " + targetAPIKey);
+          await loadQuotaStatus(false);
+        } catch (error) {
+          setActionToast("선택 계정 저장 실패: " + (error && error.message ? error.message : "unknown error"));
+          setStatus("error", error && error.message ? error.message : "선택 계정 저장 실패");
+        } finally {
+          if (button) button.disabled = previousDisabled;
         }
       }
 
@@ -2564,6 +2797,7 @@
         var apiKeyAliases = normaliseAPIKeyAliases(payload);
         var usageRows = collectUsageRows(payload, apiKeyAliases);
         var authFiles = normaliseAuthFiles(payload);
+        currentAuthFiles = authFiles.slice();
         renderSummary(quotas, usageRows, authFiles);
         renderQuotas(quotas);
         renderUsage(usageRows);
@@ -2671,6 +2905,17 @@
       concurrencySavePolicyButton.addEventListener("click", function () {
         saveClientConcurrencyPolicy(concurrencyPolicyAPIKeyInput && concurrencyPolicyAPIKeyInput.value, concurrencyPolicyLimitInput && concurrencyPolicyLimitInput.value, concurrencySavePolicyButton);
       });
+
+      if (concurrencyPanelToggle) {
+        concurrencyPanelToggle.addEventListener("click", function () {
+          toggleConcurrencyPanelExpanded();
+        });
+        concurrencyPanelToggle.addEventListener("keydown", function (event) {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          toggleConcurrencyPanelExpanded();
+        });
+      }
 
       autoRefreshEnabled.addEventListener("change", function () {
         if (autoRefreshEnabled.checked) {

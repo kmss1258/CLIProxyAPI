@@ -99,6 +99,25 @@ func TestQuotaHTML(t *testing.T) {
 	if body := rr.Body.String(); !strings.Contains(body, "동시 요청 override") || !strings.Contains(body, "기본값으로 되돌리기") {
 		t.Fatalf("quota page body missing inline concurrency controls: %s", body)
 	}
+	if body := rr.Body.String(); !strings.Contains(body, `<link rel="icon" href="/favicon.ico" type="image/x-icon">`) {
+		t.Fatalf("quota page body missing favicon link: %s", body)
+	}
+}
+
+func TestQuotaFavicon(t *testing.T) {
+	server := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); got != "image/x-icon" {
+		t.Fatalf("unexpected content type: got %q want %q", got, "image/x-icon")
+	}
+	if rr.Body.Len() == 0 {
+		t.Fatalf("expected non-empty favicon body")
+	}
 }
 
 func TestManagementQuotaStatusRouteRequiresKey(t *testing.T) {

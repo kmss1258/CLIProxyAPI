@@ -350,6 +350,7 @@ func (s *Server) setupRoutes() {
 
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
 	s.engine.GET("/quota.html", s.serveQuotaStatusPage)
+	s.engine.GET("/favicon.ico", s.serveQuotaStatusFavicon)
 	s.engine.GET("/v0/quota-status", s.mgmt.GetQuotaStatusViewer)
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
