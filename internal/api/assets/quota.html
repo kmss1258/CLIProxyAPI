@@ -211,6 +211,52 @@
     }
     .meta-pill .code { color: var(--text); font-weight: 500; }
 
+    .guide-toggle {
+      width: 100%;
+      min-height: 0;
+      padding: 12px 16px;
+      justify-content: space-between;
+      gap: 12px;
+      text-align: left;
+      border-color: var(--line);
+      background: rgba(0,0,0,0.18);
+      margin-bottom: 14px;
+    }
+
+    .guide-toggle-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      align-items: flex-start;
+    }
+
+    .guide-toggle-label {
+      color: var(--text);
+      font-size: 0.9rem;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+
+    .guide-toggle-note {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      font-weight: 500;
+      line-height: 1.4;
+    }
+
+    .guide-toggle-icon {
+      flex: 0 0 auto;
+      color: var(--accent-strong);
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      transition: transform 0.2s ease;
+    }
+
+    .guide-toggle[aria-expanded="true"] .guide-toggle-icon {
+      transform: rotate(180deg);
+    }
+
     .control-grid {
       display: flex;
       flex-wrap: wrap;
@@ -349,8 +395,47 @@
     .sections { display: flex; flex-direction: column; gap: 32px; }
     .panel { padding: 24px; background: var(--surface); }
     .panel-head { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
-    #concurrency-panel-toggle { cursor: pointer; }
-    .section-note { margin-top: 8px; font-size: 0.95rem; }
+    .toggleable-head {
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-radius: var(--radius-md);
+      padding: 16px;
+      margin: -16px -16px 24px -16px;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+    }
+    .toggleable-head:hover {
+      background-color: rgba(255, 255, 255, 0.03);
+      border-bottom-color: var(--accent-strong);
+    }
+    .panel-head-content {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .panel-toggle-icon {
+      flex: 0 0 auto;
+      color: var(--accent-strong);
+      font-family: var(--mono);
+      font-size: 1.2rem;
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      margin-left: 16px;
+      margin-top: 2px;
+    }
+    .toggleable-head[aria-expanded="true"] .panel-toggle-icon {
+      transform: rotate(180deg);
+    }
+    /* Add smooth open/close fade-in effect when panel body is shown */
+    #usage-panel-body, #concurrency-panel-body {
+      animation: fadeInSlideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes fadeInSlideDown {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .section-note { margin-top: 4px; font-size: 0.95rem; }
 
     .quota-grid, .auth-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
 
@@ -690,6 +775,79 @@
       font-size: 0.8rem;
     }
 
+    .setup-guide-panel {
+      margin-top: 0;
+      margin-bottom: 18px;
+      padding: 14px;
+      gap: 14px;
+    }
+
+    .setup-guide-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .setup-guide-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .setup-guide-card {
+      padding: 14px;
+      border-radius: var(--radius-md);
+      border: 1px solid rgba(255,255,255,0.05);
+      background: rgba(0,0,0,0.16);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .setup-guide-card h3 {
+      font-size: 0.95rem;
+      line-height: 1.3;
+    }
+
+    .setup-guide-list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      line-height: 1.5;
+    }
+
+    .setup-guide-list li + li {
+      margin-top: 4px;
+    }
+
+    .setup-guide-code {
+      margin: 0;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(255,255,255,0.05);
+      background: var(--bg);
+      color: var(--text-soft);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      line-height: 1.55;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .setup-guide-code code {
+      font: inherit;
+    }
+
+    .setup-guide-footnote {
+      margin: 0;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
     /* Token Table Styling */
     .token-table {
       display: grid;
@@ -719,6 +877,161 @@
     .t-reason { color: #a78bfa; }
     .t-cache { color: #fbbf24; }
 
+    /* --- Enhanced UI/UX Overrides --- */
+    :root {
+      --bg: #030712; 
+      --surface: #111827;
+      --panel: #1f2937;
+      --line: #374151;
+      --line-strong: #4b5563;
+      --accent: #6366f1;
+      --accent-strong: #818cf8;
+      --accent-soft: rgba(99, 102, 241, 0.15);
+      --good: #10b981;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+    }
+
+    body {
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.1) 0%, transparent 40%),
+        radial-gradient(circle at 50% 50%, rgba(245, 158, 11, 0.05) 0%, transparent 60%);
+    }
+
+    .hero, .quota-card, .auth-card, .usage-row, .panel, .stat {
+      background: linear-gradient(180deg, var(--surface) 0%, #0f141e 100%);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+    
+    .quota-card:hover, .auth-card:hover, .usage-row:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--accent-strong);
+    }
+
+    .btn {
+      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+      position: relative;
+      overflow: hidden;
+    }
+    .btn:not(:disabled):hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .btn:not(:disabled):active {
+      transform: translateY(1px);
+      box-shadow: none;
+    }
+
+    .progress-fill {
+      position: relative;
+      overflow: hidden;
+    }
+    .progress-fill::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; bottom: 0; right: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      animation: shimmer 2s infinite linear;
+    }
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+
+    .page {
+      padding: clamp(16px, 3vw, 32px) clamp(12px, 3vw, 24px) 60px;
+    }
+    h1 {
+      font-size: clamp(1.75rem, 4vw, 2.75rem);
+      background: linear-gradient(to right, #ffffff, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .quota-grid, .auth-grid { 
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); 
+      gap: clamp(12px, 2vw, 20px);
+    }
+    
+    .stat-grid {
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+      gap: clamp(12px, 2vw, 16px);
+    }
+
+    .guide-toggle {
+      background: linear-gradient(90deg, rgba(99, 102, 241, 0.1) 0%, rgba(129, 140, 248, 0.05) 100%);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      border-radius: var(--radius-lg);
+      padding: 16px 20px;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px -5px rgba(99, 102, 241, 0.15);
+      position: relative;
+      overflow: hidden;
+      cursor: pointer;
+    }
+    
+    .guide-toggle::before {
+      content: '';
+      position: absolute;
+      top: 0; left: -100%; width: 50%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.1), transparent);
+      animation: bannerShimmer 3s infinite;
+      pointer-events: none;
+    }
+    
+    @keyframes bannerShimmer {
+      100% { left: 200%; }
+    }
+
+    .guide-toggle:hover, .guide-toggle[aria-expanded="true"] {
+      background: linear-gradient(90deg, rgba(99, 102, 241, 0.15) 0%, rgba(129, 140, 248, 0.1) 100%);
+      border-color: var(--accent-strong);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px -5px rgba(99, 102, 241, 0.25);
+    }
+
+    .guide-toggle-label {
+      color: #e0e7ff;
+      font-size: 1rem;
+      text-shadow: 0 0 10px rgba(99, 102, 241, 0.3);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .guide-toggle-label::before {
+      content: "🚀";
+      font-size: 1.1rem;
+    }
+
+    .setup-guide-panel {
+      background: linear-gradient(180deg, rgba(17, 24, 39, 0.95) 0%, rgba(15, 20, 30, 0.95) 100%);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      box-shadow: var(--shadow-lg), 0 0 30px -10px rgba(99, 102, 241, 0.15);
+      border-radius: var(--radius-lg);
+      padding: clamp(16px, 3vw, 24px);
+      margin-bottom: 24px;
+    }
+
+    .setup-guide-card {
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      transition: all 0.2s ease;
+    }
+    .setup-guide-card:hover {
+      border-color: var(--accent);
+      background: rgba(0,0,0,0.4);
+    }
+    .setup-guide-code {
+      background: #09090b !important;
+      border: 1px solid var(--line-strong) !important;
+    }
+
     @media (max-width: 1024px) { .auth-stats { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 768px) {
       .page { padding: 16px 12px 32px; }
@@ -729,7 +1042,19 @@
       .usage-row-top { flex-direction: column; }
       .compact-admin-stat-grid { grid-template-columns: 1fr; }
       .compact-admin-item-head, .compact-admin-section-head { flex-direction: column; }
+      .setup-guide-grid { grid-template-columns: 1fr; }
+      .guide-toggle { align-items: flex-start; }
       .token-table { font-size: 0.75rem; padding: 10px; gap: 4px 6px; }
+    }
+
+    @media (max-width: 640px) {
+      .hero-meta { flex-direction: column; align-items: flex-start; }
+      .search-box { width: 100%; }
+      .btn { width: 100%; justify-content: center; }
+      .card-head { flex-direction: column; }
+      .card-title { width: 100%; }
+      .actions { width: 100%; justify-content: flex-start; margin-top: 8px; }
+      .progress-meta { flex-direction: column; gap: 4px; align-items: flex-start; }
     }
   </style>
 </head>
@@ -745,6 +1070,61 @@
         <span id="manage-pill" class="meta-pill">계정 토글: <span class="code">/v0/management/auth-files/status</span></span>
       </div>
     </div>
+
+      <button id="setup-guide-toggle" class="button guide-toggle" type="button" aria-expanded="false" aria-controls="setup-guide-panel">
+        <span class="guide-toggle-copy">
+          <span class="guide-toggle-label">빠른 설정 가이드</span>
+          <span class="guide-toggle-note">OpenAI 호환 클라이언트와 Claude Code 연결 예시를 접어둔 상태로 제공합니다.</span>
+        </span>
+        <span class="guide-toggle-icon" aria-hidden="true">▾</span>
+      </button>
+
+      <section id="setup-guide-panel" class="compact-admin-panel setup-guide-panel" hidden aria-labelledby="setup-guide-title">
+        <div class="setup-guide-head">
+          <div>
+            <h2 id="setup-guide-title">설정 방법 요약</h2>
+            <p class="section-note">현재 quota 페이지와 같은 호스트를 기준으로 잡고, 필요한 경로만 붙여 바로 연결하면 됩니다.</p>
+          </div>
+        </div>
+        <div class="setup-guide-grid">
+          <article class="setup-guide-card" aria-labelledby="setup-guide-openai-title">
+            <div>
+              <h3 id="setup-guide-openai-title">OpenAI API compatible</h3>
+              <p class="compact-admin-inline-note">OpenAI 호환 SDK·CLI는 보통 <span class="code">OPENAI_BASE_URL</span> 과 <span class="code">OPENAI_API_KEY</span> 만 맞추면 됩니다.</p>
+            </div>
+            <ul class="setup-guide-list">
+              <li>Base URL은 <span class="code">/v1</span> 까지 포함합니다.</li>
+              <li>API 키는 quota 페이지를 열 때 쓰는 일반 API 키를 넣으면 됩니다.</li>
+            </ul>
+            <pre class="setup-guide-code" aria-label="OpenAI compatible example"><code>export OPENAI_BASE_URL="https://your-proxy.example.com/v1"
+export OPENAI_API_KEY="your-client-api-key"
+
+curl "$OPENAI_BASE_URL/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4.1","messages":[{"role":"user","content":"hello"}]}'</code></pre>
+          </article>
+
+          <article class="setup-guide-card" aria-labelledby="setup-guide-claude-title">
+            <div>
+              <h3 id="setup-guide-claude-title">Claude Code</h3>
+              <p class="compact-admin-inline-note">Claude Code는 <span class="code">ANTHROPIC_BASE_URL</span> 과 <span class="code">ANTHROPIC_AUTH_TOKEN</span> 을 쓰고, 기본 모델은 환경 변수로 고정할 수 있습니다.</p>
+            </div>
+            <ul class="setup-guide-list">
+              <li>Base URL은 루트 호스트만 넣으면 Claude Code가 <span class="code">/v1/messages</span> 를 붙여 호출합니다.</li>
+              <li>기본 모델은 <span class="code">ANTHROPIC_DEFAULT_*</span> 환경 변수로 고정할 수 있고, 값은 서버가 노출한 alias와 정확히 같아야 합니다.</li>
+            </ul>
+            <pre class="setup-guide-code" aria-label="Claude Code environment example"><code>export ANTHROPIC_BASE_URL="https://your-proxy.example.com"
+export ANTHROPIC_AUTH_TOKEN="your-client-api-key"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="gpt-5.4-mini"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="gpt-5.4"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="gpt-5.4"
+
+claude</code></pre>
+          </article>
+        </div>
+        <p class="setup-guide-footnote">관리 키는 운영 화면용이고, 실제 툴 연결에는 클라이언트 API 키를 사용하는 편이 안전합니다.</p>
+      </section>
 
       <form id="load-form" novalidate>
         <div class="control-grid">
@@ -815,18 +1195,26 @@
       <div id="stat-auths-card" class="stat"><span class="stat-label">연동된 계정</span><div id="stat-auths" class="stat-value">0</div></div>
     </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>API 키 사용량 상세</h2>
-          <p class="section-note">quota와 별도로 실제 활동량을 보는 구간입니다. 24시간·7일 요청 수와 총 토큰, 입력·출력·추론·캐시 토큰을 payload 기준 그대로 보여줍니다.</p>
+      <section id="usage-panel" class="panel">
+        <div id="usage-panel-toggle" class="panel-head toggleable-head" role="button" tabindex="0" aria-expanded="false" aria-controls="usage-panel-body">
+          <div class="panel-head-content">
+            <h2>API 키 사용량 상세</h2>
+            <p class="section-note">quota와 별도로 실제 활동량을 보는 구간입니다. 24시간·7일 요청 수와 총 토큰, 입력·출력·추론·캐시 토큰을 payload 기준 그대로 보여줍니다.</p>
+          </div>
+          <span class="panel-toggle-icon" aria-hidden="true">▾</span>
         </div>
-        <div id="usage-section" class="usage-list"></div>
+        <div id="usage-panel-body" hidden>
+          <div id="usage-section" class="usage-list"></div>
+        </div>
       </section>
 
       <section id="concurrency-panel" class="panel" hidden>
-        <div id="concurrency-panel-toggle" class="panel-head" role="button" tabindex="0" aria-expanded="false" aria-controls="concurrency-panel-body">
-          <h2>API 키 관리 고급 설정</h2>
-          <p class="section-note">관리 키에서만 보입니다. API 키 운영의 고급 단계로, 동시 요청 기본값과 경로 제한, 특정 API 키 override, 현재 처리 상태를 한곳에서 함께 관리합니다.</p>
+        <div id="concurrency-panel-toggle" class="panel-head toggleable-head" role="button" tabindex="0" aria-expanded="false" aria-controls="concurrency-panel-body">
+          <div class="panel-head-content">
+            <h2>API 키 관리 고급 설정</h2>
+            <p class="section-note">관리 키에서만 보입니다. API 키 운영의 고급 단계로, 동시 요청 기본값과 경로 제한, 특정 API 키 override, 현재 처리 상태를 한곳에서 함께 관리합니다.</p>
+          </div>
+          <span class="panel-toggle-icon" aria-hidden="true">▾</span>
         </div>
         <div id="concurrency-panel-body" hidden>
         <div id="concurrency-overview" class="compact-admin-stat-grid"></div>
@@ -925,6 +1313,8 @@
       var clearButton = document.getElementById("clear-button");
       var statusBar = document.getElementById("status-bar");
       var actionToast = document.getElementById("action-toast");
+      var setupGuideToggle = document.getElementById("setup-guide-toggle");
+      var setupGuidePanel = document.getElementById("setup-guide-panel");
       var apiKeyCreatePanel = document.getElementById("api-key-create-panel");
       var apiKeyCreateOutput = document.getElementById("api-key-create-output");
       var apiKeyQuotaInput = document.getElementById("api-key-quota-input");
@@ -932,6 +1322,8 @@
       var apiKeyGenerateButton = document.getElementById("api-key-generate-button");
       var apiKeyCreateButton = document.getElementById("api-key-create-button");
       var authPanel = document.getElementById("auth-panel");
+      var usagePanelToggle = document.getElementById("usage-panel-toggle");
+      var usagePanelBody = document.getElementById("usage-panel-body");
       var concurrencyPanel = document.getElementById("concurrency-panel");
       var concurrencyPanelToggle = document.getElementById("concurrency-panel-toggle");
       var concurrencyPanelBody = document.getElementById("concurrency-panel-body");
@@ -1348,6 +1740,15 @@
         node.textContent = text || "";
       }
 
+      function setUsagePanelExpanded(expanded) {
+        if (usagePanelBody) usagePanelBody.hidden = !expanded;
+        if (usagePanelToggle) usagePanelToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      }
+
+      function toggleUsagePanelExpanded() {
+        setUsagePanelExpanded(!usagePanelBody || usagePanelBody.hidden);
+      }
+
       function setConcurrencyPanelExpanded(expanded) {
         if (concurrencyPanelBody) concurrencyPanelBody.hidden = !expanded;
         if (concurrencyPanelToggle) concurrencyPanelToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
@@ -1355,6 +1756,15 @@
 
       function toggleConcurrencyPanelExpanded() {
         setConcurrencyPanelExpanded(!concurrencyPanelBody || concurrencyPanelBody.hidden);
+      }
+
+      function setSetupGuideExpanded(expanded) {
+        if (setupGuidePanel) setupGuidePanel.hidden = !expanded;
+        if (setupGuideToggle) setupGuideToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      }
+
+      function toggleSetupGuideExpanded() {
+        setSetupGuideExpanded(!setupGuidePanel || setupGuidePanel.hidden);
       }
 
       function renderCompactStat(label, value, note) {
@@ -2888,6 +3298,12 @@
         createAPIKey();
       });
 
+      if (setupGuideToggle) {
+        setupGuideToggle.addEventListener("click", function () {
+          toggleSetupGuideExpanded();
+        });
+      }
+
       concurrencySaveDefaultsButton.addEventListener("click", function () {
         saveConcurrencyDefaults();
       });
@@ -2905,6 +3321,17 @@
       concurrencySavePolicyButton.addEventListener("click", function () {
         saveClientConcurrencyPolicy(concurrencyPolicyAPIKeyInput && concurrencyPolicyAPIKeyInput.value, concurrencyPolicyLimitInput && concurrencyPolicyLimitInput.value, concurrencySavePolicyButton);
       });
+
+      if (usagePanelToggle) {
+        usagePanelToggle.addEventListener("click", function () {
+          toggleUsagePanelExpanded();
+        });
+        usagePanelToggle.addEventListener("keydown", function (event) {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          toggleUsagePanelExpanded();
+        });
+      }
 
       if (concurrencyPanelToggle) {
         concurrencyPanelToggle.addEventListener("click", function () {
@@ -2930,6 +3357,7 @@
       renderAll({ client_api_key_quotas: [], api_key_aliases: {}, usage: { apis: {} }, auth_files: [], auth_usage: [], viewer: { can_manage: false, scope: "none" } });
       resetAPIKeyCreateDefaults();
       resetConcurrencyState();
+      setSetupGuideExpanded(false);
     })();
   </script>
 </body>
