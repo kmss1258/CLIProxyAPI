@@ -22,6 +22,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/app" -w /app golang:1.26-al
 ```bash
 docker compose up -d --build --pull never cli-proxy-api
 ```
+- In this workspace, the locally running `cli-proxy-api` service is exposed through the existing reverse-proxy setup, so rebuilding/restarting the local service updates the live `https://cpa.exusio.uk` routes that point at this host. When verifying dashboard changes, treat the local compose service as the live backend and confirm the running container is using the rebuilt local image rather than the published `eceasy/cli-proxy-api:latest` image.
 - Common flags: `--config <path>`, `--tui`, `--standalone`, `--local-model`, `--no-browser`, `--oauth-callback-port <port>`
 
 ## Config
