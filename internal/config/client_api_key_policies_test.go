@@ -16,10 +16,27 @@ func TestNormalizeClientAPIKeyPoliciesTrimsAlias(t *testing.T) {
 	}
 }
 
+func TestNormalizeClientAPIKeyPoliciesTrimsSelectedAuthIndex(t *testing.T) {
+	items := NormalizeClientAPIKeyPolicies([]ClientAPIKeyPolicy{{APIKey: "known-key", SelectedAuthIndex: "  auth-123  "}})
+	if len(items) != 1 {
+		t.Fatalf("expected one normalized policy, got %d", len(items))
+	}
+	if got := items[0].SelectedAuthIndex; got != "auth-123" {
+		t.Fatalf("expected trimmed selected auth index, got %q", got)
+	}
+}
+
 func TestValidateClientAPIKeyPoliciesRejectsLongAlias(t *testing.T) {
 	items := []ClientAPIKeyPolicy{{APIKey: "known-key", Alias: "12345678901234567890123456789012345678901234567890123456789012345"}}
 	if err := ValidateClientAPIKeyPolicies([]string{"known-key"}, items); err == nil {
 		t.Fatalf("expected long alias to be rejected")
+	}
+}
+
+func TestValidateClientAPIKeyPoliciesRejectsSelectedAuthIndexControlCharacters(t *testing.T) {
+	items := []ClientAPIKeyPolicy{{APIKey: "known-key", SelectedAuthIndex: "auth\n-123"}}
+	if err := ValidateClientAPIKeyPolicies([]string{"known-key"}, items); err == nil {
+		t.Fatalf("expected selected auth index with control characters to be rejected")
 	}
 }
 
@@ -104,5 +121,30 @@ client-api-key-policies:
 	}
 	if _, err := LoadConfigOptional(configPath, false); err == nil {
 		t.Fatalf("expected conflicting deprecated and hour reset values to be rejected")
+	}
+}
+
+func TestLoadConfigOptionalPreservesSelectedAuthIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configYAML := []byte(`
+api-keys:
+  - known-key
+client-api-key-policies:
+  - api-key: known-key
+    selected-auth-index: auth-123
+`)
+	if err := os.WriteFile(configPath, configYAML, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfg, err := LoadConfigOptional(configPath, false)
+	if err != nil {
+		t.Fatalf("LoadConfigOptional() error = %v", err)
+	}
+	if len(cfg.ClientAPIKeyPolicies) != 1 {
+		t.Fatalf("expected one policy, got %d", len(cfg.ClientAPIKeyPolicies))
+	}
+	if got := cfg.ClientAPIKeyPolicies[0].SelectedAuthIndex; got != "auth-123" {
+		t.Fatalf("expected selected auth index to persist, got %q", got)
 	}
 }
