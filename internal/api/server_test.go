@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,11 +17,41 @@ import (
 	proxyconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	"golang.org/x/crypto/bcrypt"
 )
+
+type claudeRouteTestExecutor struct{}
+
+func (e *claudeRouteTestExecutor) Identifier() string { return "claude" }
+
+func (e *claudeRouteTestExecutor) Execute(context.Context, *auth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{Payload: []byte(`{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`)}, nil
+}
+
+func (e *claudeRouteTestExecutor) ExecuteStream(context.Context, *auth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	chunks := make(chan cliproxyexecutor.StreamChunk, 2)
+	chunks <- cliproxyexecutor.StreamChunk{Payload: []byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\n")}
+	chunks <- cliproxyexecutor.StreamChunk{Payload: []byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}\n\n")}
+	close(chunks)
+	return &cliproxyexecutor.StreamResult{Chunks: chunks}, nil
+}
+
+func (e *claudeRouteTestExecutor) CountTokens(context.Context, *auth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{Payload: []byte(`{"input_tokens":3}`)}, nil
+}
+
+func (e *claudeRouteTestExecutor) Refresh(context.Context, *auth.Auth) (*auth.Auth, error) {
+	return nil, nil
+}
+
+func (e *claudeRouteTestExecutor) HttpRequest(context.Context, *auth.Auth, *http.Request) (*http.Response, error) {
+	return nil, nil
+}
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
@@ -49,6 +80,21 @@ func newTestServer(t *testing.T) *Server {
 
 	configPath := filepath.Join(tmpDir, "config.yaml")
 	return NewServer(cfg, authManager, accessManager, configPath)
+}
+
+func newClaudeRouteTestServer(t *testing.T, modelID string) *Server {
+	t.Helper()
+	server := newTestServer(t)
+	server.handlers.AuthManager.RegisterExecutor(&claudeRouteTestExecutor{})
+	claudeAuth := &auth.Auth{ID: "claude-auth-1", Provider: "claude", Status: auth.StatusActive}
+	if _, err := server.handlers.AuthManager.Register(context.Background(), claudeAuth); err != nil {
+		t.Fatalf("failed to register claude auth: %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(claudeAuth.ID, claudeAuth.Provider, []*registry.ModelInfo{{ID: modelID}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(claudeAuth.ID)
+	})
+	return server
 }
 
 func TestHealthz(t *testing.T) {
@@ -117,6 +163,89 @@ func TestQuotaFavicon(t *testing.T) {
 	}
 	if rr.Body.Len() == 0 {
 		t.Fatalf("expected non-empty favicon body")
+	}
+}
+
+func TestClaudeEventLoggingBatchEndpoint(t *testing.T) {
+	server := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/event_logging/batch", bytes.NewBufferString(`{"events":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusNoContent, rr.Body.String())
+	}
+	if rr.Body.Len() != 0 {
+		t.Fatalf("expected empty body, got %q", rr.Body.String())
+	}
+}
+
+func TestClaudeMessagesRoute_NonStreaming(t *testing.T) {
+	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-sonnet-latest","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("unexpected content type: %q", got)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, `"type":"message"`) || !strings.Contains(body, `"text":"ok"`) {
+		t.Fatalf("unexpected response body: %s", body)
+	}
+}
+
+func TestClaudeMessagesRoute_Streaming(t *testing.T) {
+	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-sonnet-latest","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("unexpected content type: %q", got)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "event: message_start") || !strings.Contains(body, "event: message_delta") {
+		t.Fatalf("unexpected stream body: %s", body)
+	}
+	if !strings.Contains(body, `"stop_reason":"end_turn"`) {
+		t.Fatalf("stream body missing stop_reason: %s", body)
+	}
+}
+
+func TestClaudeCountTokensRoute(t *testing.T) {
+	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewBufferString(`{"model":"claude-sonnet-latest","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if body := rr.Body.String(); body != `{"input_tokens":3}` {
+		t.Fatalf("unexpected count_tokens body: %s", body)
+	}
+}
+
+func TestV1ModelsIncludesClaudeModel(t *testing.T) {
+	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "claude-sonnet-latest") {
+		t.Fatalf("expected claude model in models response, got %s", body)
 	}
 }
 
