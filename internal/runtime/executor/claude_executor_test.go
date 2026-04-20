@@ -597,6 +597,64 @@ func TestApplyClaudeHeaders_UnsetStabilizationAlsoUsesLegacyRuntimeOSArchFallbac
 	assertClaudeFingerprint(t, req.Header, "claude-cli/2.1.60 (external, cli)", "0.70.0", "v22.0.0", helps.MapStainlessOS(), helps.MapStainlessArch())
 }
 
+func TestApplyClaudeHeaders_PreservesClaudeCodeHeaders(t *testing.T) {
+	resetClaudeDeviceProfileCache()
+
+	cfg := &config.Config{}
+	auth := &cliproxyauth.Auth{
+		ID: "auth-preserve-claude-headers",
+		Attributes: map[string]string{
+			"api_key": "key-preserve-claude-headers",
+		},
+	}
+
+	req := newClaudeHeaderTestRequest(t, http.Header{
+		"Anthropic-Version":        []string{"2023-06-01"},
+		"Anthropic-Beta":           []string{"context-1m-2025-08-07"},
+		"X-Claude-Code-Session-Id": []string{"session-from-client"},
+	})
+	applyClaudeHeaders(req, auth, "key-preserve-claude-headers", false, nil, cfg)
+
+	if got := req.Header.Get("Anthropic-Version"); got != "2023-06-01" {
+		t.Fatalf("Anthropic-Version = %q, want %q", got, "2023-06-01")
+	}
+	beta := req.Header.Get("Anthropic-Beta")
+	if !strings.Contains(beta, "context-1m-2025-08-07") {
+		t.Fatalf("Anthropic-Beta missing client beta: %q", beta)
+	}
+	if !strings.Contains(beta, "oauth-2025-04-20") {
+		t.Fatalf("Anthropic-Beta missing oauth beta: %q", beta)
+	}
+	if !strings.Contains(beta, "interleaved-thinking-2025-05-14") {
+		t.Fatalf("Anthropic-Beta missing interleaved-thinking beta: %q", beta)
+	}
+	if got := req.Header.Get("X-Claude-Code-Session-Id"); got != "session-from-client" {
+		t.Fatalf("X-Claude-Code-Session-Id = %q, want %q", got, "session-from-client")
+	}
+}
+
+func TestApplyClaudeHeaders_DefaultsClaudeCodeSessionIDWhenMissing(t *testing.T) {
+	resetClaudeDeviceProfileCache()
+
+	cfg := &config.Config{}
+	auth := &cliproxyauth.Auth{
+		ID: "auth-default-session-id",
+		Attributes: map[string]string{
+			"api_key": "key-default-session-id",
+		},
+	}
+
+	req := newClaudeHeaderTestRequest(t, http.Header{})
+	applyClaudeHeaders(req, auth, "key-default-session-id", false, nil, cfg)
+
+	if got := req.Header.Get("Anthropic-Version"); got != "2023-06-01" {
+		t.Fatalf("Anthropic-Version = %q, want %q", got, "2023-06-01")
+	}
+	if got := req.Header.Get("X-Claude-Code-Session-Id"); got == "" {
+		t.Fatal("expected X-Claude-Code-Session-Id to be populated")
+	}
+}
+
 func TestClaudeDeviceProfileStabilizationEnabled_DefaultFalse(t *testing.T) {
 	if helps.ClaudeDeviceProfileStabilizationEnabled(nil) {
 		t.Fatal("expected nil config to default to disabled stabilization")
@@ -1096,9 +1154,17 @@ func TestEnforceCacheControlLimit_ToolOnlyPayloadStillRespectsLimit(t *testing.T
 
 func TestClaudeExecutor_CountTokens_AppliesCacheControlGuards(t *testing.T) {
 	var seenBody []byte
+	var seenPath string
+	var seenVersion string
+	var seenBeta string
+	var seenSessionID string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		seenBody = bytes.Clone(body)
+		seenPath = r.URL.Path
+		seenVersion = r.Header.Get("Anthropic-Version")
+		seenBeta = r.Header.Get("Anthropic-Beta")
+		seenSessionID = r.Header.Get("X-Claude-Code-Session-Id")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"input_tokens":42}`))
 	}))
@@ -1136,11 +1202,124 @@ func TestClaudeExecutor_CountTokens_AppliesCacheControlGuards(t *testing.T) {
 	if len(seenBody) == 0 {
 		t.Fatal("expected count_tokens request body to be captured")
 	}
+	if seenPath != "/v1/messages/count_tokens" {
+		t.Fatalf("request path = %q, want %q", seenPath, "/v1/messages/count_tokens")
+	}
+	if seenVersion != "2023-06-01" {
+		t.Fatalf("Anthropic-Version = %q, want %q", seenVersion, "2023-06-01")
+	}
+	if seenBeta == "" {
+		t.Fatal("expected Anthropic-Beta header to be set")
+	}
+	if seenSessionID == "" {
+		t.Fatal("expected X-Claude-Code-Session-Id header to be set")
+	}
 	if got := countCacheControls(seenBody); got > 4 {
 		t.Fatalf("count_tokens body has %d cache_control blocks, want <= 4", got)
 	}
 	if hasTTLOrderingViolation(seenBody) {
 		t.Fatalf("count_tokens body still has ttl ordering violations: %s", string(seenBody))
+	}
+}
+
+func TestClaudeExecutor_Execute_PreservesClaudeHeaders(t *testing.T) {
+	var seenPath string
+	var seenVersion string
+	var seenBeta string
+	var seenSessionID string
+	var seenAccept string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		seenVersion = r.Header.Get("Anthropic-Version")
+		seenBeta = r.Header.Get("Anthropic-Beta")
+		seenSessionID = r.Header.Get("X-Claude-Code-Session-Id")
+		seenAccept = r.Header.Get("Accept")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer server.Close()
+
+	executor := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "key-123",
+		"base_url": server.URL,
+	}}
+	payload := []byte(`{"model":"claude-3-5-sonnet-20241022","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	_, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{Model: "claude-3-5-sonnet-20241022", Payload: payload}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if seenPath != "/v1/messages" {
+		t.Fatalf("request path = %q, want %q", seenPath, "/v1/messages")
+	}
+	if seenVersion != "2023-06-01" {
+		t.Fatalf("Anthropic-Version = %q, want %q", seenVersion, "2023-06-01")
+	}
+	if seenBeta == "" {
+		t.Fatal("expected Anthropic-Beta header to be set")
+	}
+	if seenSessionID == "" {
+		t.Fatal("expected X-Claude-Code-Session-Id header to be set")
+	}
+	if seenAccept != "application/json" {
+		t.Fatalf("Accept = %q, want %q", seenAccept, "application/json")
+	}
+}
+
+func TestClaudeExecutor_ExecuteStream_PreservesClaudeHeaders(t *testing.T) {
+	var seenPath string
+	var seenVersion string
+	var seenBeta string
+	var seenSessionID string
+	var seenAccept string
+	var seenAcceptEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		seenVersion = r.Header.Get("Anthropic-Version")
+		seenBeta = r.Header.Get("Anthropic-Beta")
+		seenSessionID = r.Header.Get("X-Claude-Code-Session-Id")
+		seenAccept = r.Header.Get("Accept")
+		seenAcceptEncoding = r.Header.Get("Accept-Encoding")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\n"))
+		_, _ = w.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}\n\n"))
+	}))
+	defer server.Close()
+
+	executor := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "key-123",
+		"base_url": server.URL,
+	}}
+	payload := []byte(`{"model":"claude-3-5-sonnet-20241022","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	streamResult, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{Model: "claude-3-5-sonnet-20241022", Payload: payload}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	var chunks []byte
+	for chunk := range streamResult.Chunks {
+		chunks = append(chunks, chunk.Payload...)
+	}
+	if !bytes.Contains(chunks, []byte("message_delta")) {
+		t.Fatalf("expected streamed message_delta, got %s", string(chunks))
+	}
+	if seenPath != "/v1/messages" {
+		t.Fatalf("request path = %q, want %q", seenPath, "/v1/messages")
+	}
+	if seenVersion != "2023-06-01" {
+		t.Fatalf("Anthropic-Version = %q, want %q", seenVersion, "2023-06-01")
+	}
+	if seenBeta == "" {
+		t.Fatal("expected Anthropic-Beta header to be set")
+	}
+	if seenSessionID == "" {
+		t.Fatal("expected X-Claude-Code-Session-Id header to be set")
+	}
+	if seenAccept != "text/event-stream" {
+		t.Fatalf("Accept = %q, want %q", seenAccept, "text/event-stream")
+	}
+	if seenAcceptEncoding != "identity" {
+		t.Fatalf("Accept-Encoding = %q, want %q", seenAcceptEncoding, "identity")
 	}
 }
 
