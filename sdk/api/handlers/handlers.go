@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -252,6 +253,109 @@ func executionSessionIDFromContext(ctx context.Context) string {
 	}
 }
 
+func (h *BaseAPIHandler) applyClientAPIKeySelectedAuth(ctx context.Context, providers []string, modelName string) (context.Context, error) {
+	if h == nil || ctx == nil || h.Cfg == nil || h.AuthManager == nil || len(h.Cfg.ClientAPIKeyPolicies) == 0 {
+		return ctx, nil
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return ctx, nil
+	}
+	rawAPIKey, exists := ginCtx.Get("apiKey")
+	if !exists {
+		return ctx, nil
+	}
+	apiKey, ok := rawAPIKey.(string)
+	if !ok {
+		return ctx, nil
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return ctx, nil
+	}
+	selectedAuthIndex := ""
+	for _, item := range h.Cfg.ClientAPIKeyPolicies {
+		if strings.TrimSpace(item.APIKey) != apiKey {
+			continue
+		}
+		selectedAuthIndex = strings.TrimSpace(item.SelectedAuthIndex)
+		break
+	}
+	if selectedAuthIndex == "" {
+		return ctx, nil
+	}
+	selectedAuth := resolveSelectedAuth(h.AuthManager.List(), selectedAuthIndex)
+	if selectedAuth == nil {
+		return ctx, selectedAuthRestrictionError(apiKey, selectedAuthIndex, modelName, "selected upstream account was not found")
+	}
+	if !authSupportsRequest(selectedAuth, providers, modelName) {
+		reason := "selected upstream account cannot serve the requested model"
+		if selectedAuth.Disabled {
+			reason = "selected upstream account is disabled"
+		} else if selectedAuth.Unavailable {
+			reason = "selected upstream account is unavailable"
+		}
+		return ctx, selectedAuthRestrictionError(apiKey, selectedAuthIndex, modelName, reason)
+	}
+	return WithPinnedAuthID(ctx, selectedAuth.ID), nil
+}
+
+func resolveSelectedAuth(auths []*coreauth.Auth, selectedAuthIndex string) *coreauth.Auth {
+	selectedAuthIndex = strings.TrimSpace(selectedAuthIndex)
+	if selectedAuthIndex == "" {
+		return nil
+	}
+	for _, auth := range auths {
+		if auth == nil {
+			continue
+		}
+		if strings.TrimSpace(auth.EnsureIndex()) == selectedAuthIndex {
+			return auth
+		}
+	}
+	return nil
+}
+
+func authSupportsRequest(auth *coreauth.Auth, providers []string, modelName string) bool {
+	if auth == nil || strings.TrimSpace(auth.ID) == "" {
+		return false
+	}
+	if auth.Disabled || auth.Unavailable {
+		return false
+	}
+	providerAllowed := len(providers) == 0
+	providerKey := strings.ToLower(strings.TrimSpace(auth.Provider))
+	for _, provider := range providers {
+		if providerKey == strings.ToLower(strings.TrimSpace(provider)) {
+			providerAllowed = true
+			break
+		}
+	}
+	if !providerAllowed {
+		return false
+	}
+	modelStates := auth.ModelStates
+	if modelStates != nil {
+		if state, ok := modelStates[strings.TrimSpace(modelName)]; ok && state != nil && state.Unavailable {
+			return false
+		}
+	}
+	for _, model := range registry.GetGlobalRegistry().GetModelsForClient(auth.ID) {
+		if model == nil {
+			continue
+		}
+		if strings.TrimSpace(model.ID) == strings.TrimSpace(modelName) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedAuthRestrictionError(apiKey, selectedAuthIndex, modelName, reason string) error {
+	message := fmt.Sprintf("client api key %q is restricted to upstream account %q for model %q: %s", apiKey, selectedAuthIndex, modelName, reason)
+	return &coreauth.Error{Code: "selected_auth_unavailable", Message: message, HTTPStatus: http.StatusServiceUnavailable}
+}
+
 // BaseAPIHandler contains the handlers for API endpoints.
 // It holds a pool of clients to interact with the backend service and manages
 // load balancing, client selection, and configuration.
@@ -473,6 +577,10 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	if errMsg != nil {
 		return nil, nil, errMsg
 	}
+	ctx, err := h.applyClientAPIKeySelectedAuth(ctx, providers, normalizedModel)
+	if err != nil {
+		return nil, nil, &interfaces.ErrorMessage{StatusCode: http.StatusServiceUnavailable, Error: err}
+	}
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
 	payload := rawJSON
@@ -519,6 +627,10 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	providers, normalizedModel, errMsg := h.getRequestDetails(modelName)
 	if errMsg != nil {
 		return nil, nil, errMsg
+	}
+	ctx, err := h.applyClientAPIKeySelectedAuth(ctx, providers, normalizedModel)
+	if err != nil {
+		return nil, nil, &interfaces.ErrorMessage{StatusCode: http.StatusServiceUnavailable, Error: err}
 	}
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
@@ -568,6 +680,13 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 	if errMsg != nil {
 		errChan := make(chan *interfaces.ErrorMessage, 1)
 		errChan <- errMsg
+		close(errChan)
+		return nil, nil, errChan
+	}
+	ctx, err := h.applyClientAPIKeySelectedAuth(ctx, providers, normalizedModel)
+	if err != nil {
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusServiceUnavailable, Error: err}
 		close(errChan)
 		return nil, nil, errChan
 	}
