@@ -1096,13 +1096,7 @@
               <li>Base URL은 <span class="code">/v1</span> 까지 포함합니다.</li>
               <li>API 키는 quota 페이지를 열 때 쓰는 일반 API 키를 넣으면 됩니다.</li>
             </ul>
-            <pre class="setup-guide-code" aria-label="OpenAI compatible example"><code>export OPENAI_BASE_URL="https://your-proxy.example.com/v1"
-export OPENAI_API_KEY="your-client-api-key"
-
-curl "$OPENAI_BASE_URL/chat/completions" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4.1","messages":[{"role":"user","content":"hello"}]}'</code></pre>
+            <pre class="setup-guide-code" aria-label="OpenAI compatible example"><code id="setup-guide-openai-code"></code></pre>
           </article>
 
           <article class="setup-guide-card" aria-labelledby="setup-guide-claude-title">
@@ -1111,16 +1105,10 @@ curl "$OPENAI_BASE_URL/chat/completions" \
               <p class="compact-admin-inline-note">Claude Code는 <span class="code">ANTHROPIC_BASE_URL</span> 과 <span class="code">ANTHROPIC_AUTH_TOKEN</span> 을 쓰고, 기본 모델은 환경 변수로 고정할 수 있습니다.</p>
             </div>
             <ul class="setup-guide-list">
-              <li>Base URL은 루트 호스트만 넣으면 Claude Code가 <span class="code">/v1/messages</span> 를 붙여 호출합니다.</li>
+              <li>Base URL은 현재 origin 뒤에 <span class="code">/api/anthropic</span> 를 붙인 값으로 맞춥니다.</li>
               <li>기본 모델은 <span class="code">ANTHROPIC_DEFAULT_*</span> 환경 변수로 고정할 수 있고, 값은 서버가 노출한 alias와 정확히 같아야 합니다.</li>
             </ul>
-            <pre class="setup-guide-code" aria-label="Claude Code environment example"><code>export ANTHROPIC_BASE_URL="https://your-proxy.example.com"
-export ANTHROPIC_AUTH_TOKEN="your-client-api-key"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="gpt-5.4-mini"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="gpt-5.4"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="gpt-5.4"
-
-claude</code></pre>
+            <pre class="setup-guide-code" aria-label="Claude Code environment example"><code id="setup-guide-claude-code"></code></pre>
           </article>
         </div>
         <p class="setup-guide-footnote">관리 키는 운영 화면용이고, 실제 툴 연결에는 클라이언트 API 키를 사용하는 편이 안전합니다.</p>
@@ -1315,6 +1303,8 @@ claude</code></pre>
       var actionToast = document.getElementById("action-toast");
       var setupGuideToggle = document.getElementById("setup-guide-toggle");
       var setupGuidePanel = document.getElementById("setup-guide-panel");
+      var setupGuideOpenAICode = document.getElementById("setup-guide-openai-code");
+      var setupGuideClaudeCode = document.getElementById("setup-guide-claude-code");
       var apiKeyCreatePanel = document.getElementById("api-key-create-panel");
       var apiKeyCreateOutput = document.getElementById("api-key-create-output");
       var apiKeyQuotaInput = document.getElementById("api-key-quota-input");
@@ -1539,6 +1529,32 @@ claude</code></pre>
           seed = String(Date.now()) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
         }
         return "key-" + seed.slice(0, 32);
+      }
+
+      function renderSetupGuideExamples() {
+        var origin = window.location && window.location.origin ? window.location.origin : "";
+        if (setupGuideOpenAICode) {
+          setupGuideOpenAICode.textContent = [
+            'export OPENAI_BASE_URL="' + origin + '/v1"',
+            'export OPENAI_API_KEY="your-client-api-key"',
+            '',
+            'curl "$OPENAI_BASE_URL/chat/completions" \\',
+            '  -H "Authorization: Bearer $OPENAI_API_KEY" \\',
+            '  -H "Content-Type: application/json" \\',
+            '  -d \'{"model":"gpt-4.1","messages":[{"role":"user","content":"hello"}]}\''
+          ].join("\n");
+        }
+        if (setupGuideClaudeCode) {
+          setupGuideClaudeCode.textContent = [
+            'export ANTHROPIC_BASE_URL="' + origin + '/api/anthropic"',
+            'export ANTHROPIC_AUTH_TOKEN="your-client-api-key"',
+            'export ANTHROPIC_DEFAULT_HAIKU_MODEL="gpt-5.4-mini"',
+            'export ANTHROPIC_DEFAULT_SONNET_MODEL="gpt-5.4"',
+            'export ANTHROPIC_DEFAULT_OPUS_MODEL="gpt-5.4"',
+            '',
+            'claude'
+          ].join("\n");
+        }
       }
 
       function parseOptionalWholeNumber(raw, label) {
@@ -3354,6 +3370,7 @@ claude</code></pre>
       });
 
       refreshInterval.addEventListener("change", scheduleAutoRefresh);
+      renderSetupGuideExamples();
       renderAll({ client_api_key_quotas: [], api_key_aliases: {}, usage: { apis: {} }, auth_files: [], auth_usage: [], viewer: { can_manage: false, scope: "none" } });
       resetAPIKeyCreateDefaults();
       resetConcurrencyState();
