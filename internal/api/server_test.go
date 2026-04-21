@@ -198,9 +198,49 @@ func TestClaudeMessagesRoute_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestAnthropicPrefixedClaudeMessagesRoute_NonStreaming(t *testing.T) {
+	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
+	req := httptest.NewRequest(http.MethodPost, "/api/anthropic/v1/messages", bytes.NewBufferString(`{"model":"claude-sonnet-latest","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("unexpected content type: %q", got)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, `"type":"message"`) || !strings.Contains(body, `"text":"ok"`) {
+		t.Fatalf("unexpected response body: %s", body)
+	}
+}
+
 func TestClaudeMessagesRoute_Streaming(t *testing.T) {
 	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-sonnet-latest","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("unexpected content type: %q", got)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "event: message_start") || !strings.Contains(body, "event: message_delta") {
+		t.Fatalf("unexpected stream body: %s", body)
+	}
+	if !strings.Contains(body, `"stop_reason":"end_turn"`) {
+		t.Fatalf("stream body missing stop_reason: %s", body)
+	}
+}
+
+func TestAnthropicPrefixedClaudeMessagesRoute_Streaming(t *testing.T) {
+	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
+	req := httptest.NewRequest(http.MethodPost, "/api/anthropic/v1/messages", bytes.NewBufferString(`{"model":"claude-sonnet-latest","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`))
 	req.Header.Set("Authorization", "Bearer test-key")
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -235,9 +275,38 @@ func TestClaudeCountTokensRoute(t *testing.T) {
 	}
 }
 
+func TestAnthropicPrefixedClaudeCountTokensRoute(t *testing.T) {
+	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
+	req := httptest.NewRequest(http.MethodPost, "/api/anthropic/v1/messages/count_tokens", bytes.NewBufferString(`{"model":"claude-sonnet-latest","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if body := rr.Body.String(); body != `{"input_tokens":3}` {
+		t.Fatalf("unexpected count_tokens body: %s", body)
+	}
+}
+
 func TestV1ModelsIncludesClaudeModel(t *testing.T) {
 	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "claude-sonnet-latest") {
+		t.Fatalf("expected claude model in models response, got %s", body)
+	}
+}
+
+func TestAnthropicPrefixedV1ModelsIncludesClaudeModel(t *testing.T) {
+	server := newClaudeRouteTestServer(t, "claude-sonnet-latest")
+	req := httptest.NewRequest(http.MethodGet, "/api/anthropic/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer test-key")
 	rr := httptest.NewRecorder()
 	server.engine.ServeHTTP(rr, req)

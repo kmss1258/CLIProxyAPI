@@ -375,6 +375,16 @@ func (s *Server) setupRoutes() {
 		v1.POST("/responses/compact", openaiResponsesHandlers.Compact)
 	}
 
+	// Anthropic-prefixed compatibility routes for clients that use
+	// ANTHROPIC_BASE_URL=https://host/api/anthropic
+	anthropicV1 := s.engine.Group("/api/anthropic/v1")
+	anthropicV1.Use(AuthMiddleware(s.accessManager), middleware.ClientQuotaMiddleware(quota.DefaultManager()), middleware.ClientConcurrencyMiddleware(concurrency.DefaultManager()))
+	{
+		anthropicV1.GET("/models", claudeCodeHandlers.ClaudeModels)
+		anthropicV1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
+		anthropicV1.POST("/messages/count_tokens", claudeCodeHandlers.ClaudeCountTokens)
+	}
+
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.accessManager), middleware.ClientQuotaMiddleware(quota.DefaultManager()), middleware.ClientConcurrencyMiddleware(concurrency.DefaultManager()))
