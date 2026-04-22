@@ -245,20 +245,31 @@ func (h *Handler) enrichQuotaStatusesWithSelectedAuth(statuses []any, authFiles 
 	if h == nil || h.cfg == nil || len(statuses) == 0 {
 		return statuses
 	}
-	selectedByKey := make(map[string]string)
+	type selectedAuthPolicySnapshot struct {
+		id    string
+		index string
+	}
+	selectedByKey := make(map[string]selectedAuthPolicySnapshot)
 	for _, item := range h.cfg.ClientAPIKeyPolicies {
 		key := strings.TrimSpace(item.APIKey)
+		selectedAuthID := strings.TrimSpace(item.SelectedAuthID)
 		selectedAuthIndex := strings.TrimSpace(item.SelectedAuthIndex)
-		if key == "" || selectedAuthIndex == "" {
+		if key == "" || (selectedAuthID == "" && selectedAuthIndex == "") {
 			continue
 		}
-		selectedByKey[key] = selectedAuthIndex
+		selectedByKey[key] = selectedAuthPolicySnapshot{id: selectedAuthID, index: selectedAuthIndex}
 	}
 	if len(selectedByKey) == 0 {
 		return statuses
 	}
+	auths := h.liveAuths()
+	authByID := make(map[string]gin.H, len(authFiles))
 	authByIndex := make(map[string]gin.H, len(authFiles))
 	for _, entry := range authFiles {
+		id := strings.TrimSpace(stringFromAny(entry["id"]))
+		if id != "" {
+			authByID[id] = entry
+		}
 		index := strings.TrimSpace(stringFromAny(entry["auth_index"]))
 		if index == "" {
 			continue
@@ -273,13 +284,29 @@ func (h *Handler) enrichQuotaStatusesWithSelectedAuth(statuses []any, authFiles 
 			continue
 		}
 		apiKey := strings.TrimSpace(stringFromAny(row["api_key"]))
-		selectedAuthIndex := selectedByKey[apiKey]
-		if selectedAuthIndex == "" {
+		selected := selectedByKey[apiKey]
+		if selected.id == "" && selected.index == "" {
 			enriched = append(enriched, row)
 			continue
 		}
-		row["selected_auth_index"] = selectedAuthIndex
-		if authEntry, ok := authByIndex[selectedAuthIndex]; ok {
+		row["selected_auth_id"] = selected.id
+		row["selected_auth_index"] = selected.index
+		resolution := resolveSelectedAuthRef(auths, selectedAuthPolicyRef{ID: selected.id, Index: selected.index})
+		row["selected_auth_resolved_via"] = resolution.resolvedBy
+		row["selected_auth_mismatch"] = resolution.mismatch
+		if resolution.auth != nil {
+			authEntry, ok := authByID[strings.TrimSpace(resolution.auth.ID)]
+			if !ok {
+				authEntry, ok = authByIndex[strings.TrimSpace(resolution.auth.EnsureIndex())]
+			}
+			if !ok {
+				row["selected_auth_label"] = ""
+				row["selected_auth_provider"] = ""
+				row["selected_auth_disabled"] = false
+				row["selected_auth_missing"] = true
+				enriched = append(enriched, row)
+				continue
+			}
 			row["selected_auth_label"] = selectedAuthLabel(authEntry)
 			row["selected_auth_provider"] = stringFromAny(authEntry["provider"])
 			row["selected_auth_disabled"] = boolFromAny(authEntry["disabled"])
