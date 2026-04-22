@@ -25,7 +25,28 @@ func (h *Handler) refreshConcurrencyManager() {
 	h.concurrencyManager.UpdateConfig(h.cfg)
 }
 
+func (h *Handler) canonicalizeClientAPIKeyPolicies(policies []config.ClientAPIKeyPolicy) []config.ClientAPIKeyPolicy {
+	if len(policies) == 0 {
+		return policies
+	}
+	auths := h.liveAuths()
+	if len(auths) == 0 {
+		return policies
+	}
+	out := append([]config.ClientAPIKeyPolicy(nil), policies...)
+	for i := range out {
+		ref := canonicalizeSelectedAuthRef(auths, selectedAuthPolicyRef{
+			ID:    out[i].SelectedAuthID,
+			Index: out[i].SelectedAuthIndex,
+		})
+		out[i].SelectedAuthID = ref.ID
+		out[i].SelectedAuthIndex = ref.Index
+	}
+	return out
+}
+
 func (h *Handler) saveClientAPIKeyPolicies(c *gin.Context, policies []config.ClientAPIKeyPolicy) bool {
+	policies = h.canonicalizeClientAPIKeyPolicies(policies)
 	tempCfg := *h.cfg
 	tempCfg.ClientAPIKeyPolicies = append([]config.ClientAPIKeyPolicy(nil), policies...)
 	if h.quotaManager != nil {
@@ -97,6 +118,7 @@ func (h *Handler) PatchClientAPIKeyPolicy(c *gin.Context) {
 	type valuePatch struct {
 		APIKey                      *string `json:"api-key"`
 		Alias                       *string `json:"alias"`
+		SelectedAuthID              *string `json:"selected-auth-id"`
 		SelectedAuthIndex           *string `json:"selected-auth-index"`
 		OutputTokenQuota            *int64  `json:"output-token-quota"`
 		OutputTokenQuotaResetHours  *int    `json:"output-token-quota-reset-hours"`
@@ -138,8 +160,17 @@ func (h *Handler) PatchClientAPIKeyPolicy(c *gin.Context) {
 		if body.Value.Alias != nil {
 			entry.Alias = strings.TrimSpace(*body.Value.Alias)
 		}
+		if body.Value.SelectedAuthID != nil {
+			entry.SelectedAuthID = strings.TrimSpace(*body.Value.SelectedAuthID)
+		}
 		if body.Value.SelectedAuthIndex != nil {
 			entry.SelectedAuthIndex = strings.TrimSpace(*body.Value.SelectedAuthIndex)
+		}
+		if body.Value.SelectedAuthID != nil && entry.SelectedAuthID == "" && body.Value.SelectedAuthIndex == nil {
+			entry.SelectedAuthIndex = ""
+		}
+		if body.Value.SelectedAuthIndex != nil && entry.SelectedAuthIndex == "" && body.Value.SelectedAuthID == nil {
+			entry.SelectedAuthID = ""
 		}
 		if body.Value.OutputTokenQuota != nil && *body.Value.OutputTokenQuota > 0 {
 			entry.OutputTokenQuota = *body.Value.OutputTokenQuota
@@ -179,8 +210,17 @@ func (h *Handler) PatchClientAPIKeyPolicy(c *gin.Context) {
 	if body.Value.Alias != nil {
 		entry.Alias = strings.TrimSpace(*body.Value.Alias)
 	}
+	if body.Value.SelectedAuthID != nil {
+		entry.SelectedAuthID = strings.TrimSpace(*body.Value.SelectedAuthID)
+	}
 	if body.Value.SelectedAuthIndex != nil {
 		entry.SelectedAuthIndex = strings.TrimSpace(*body.Value.SelectedAuthIndex)
+	}
+	if body.Value.SelectedAuthID != nil && entry.SelectedAuthID == "" && body.Value.SelectedAuthIndex == nil {
+		entry.SelectedAuthIndex = ""
+	}
+	if body.Value.SelectedAuthIndex != nil && entry.SelectedAuthIndex == "" && body.Value.SelectedAuthID == nil {
+		entry.SelectedAuthID = ""
 	}
 	if body.Value.OutputTokenQuota != nil {
 		entry.OutputTokenQuota = *body.Value.OutputTokenQuota
@@ -218,6 +258,9 @@ func (h *Handler) PatchClientAPIKeyPolicy(c *gin.Context) {
 
 func clientAPIKeyPolicyHasMeaningfulConfig(item config.ClientAPIKeyPolicy) bool {
 	if strings.TrimSpace(item.Alias) != "" {
+		return true
+	}
+	if strings.TrimSpace(item.SelectedAuthID) != "" {
 		return true
 	}
 	if strings.TrimSpace(item.SelectedAuthIndex) != "" {

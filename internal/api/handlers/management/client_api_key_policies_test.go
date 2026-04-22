@@ -2,6 +2,7 @@ package management
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
 
 func TestPutClientAPIKeyPoliciesRejectsUnknownKey(t *testing.T) {
@@ -297,6 +299,66 @@ func TestPatchClientAPIKeyPolicyCreatesSelectedAuthOnlyPolicy(t *testing.T) {
 	}
 }
 
+func TestPatchClientAPIKeyPolicyBackfillsSelectedAuthIDFromIndex(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("api-keys:\n  - known-key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	h := NewHandler(&config.Config{SDKConfig: config.SDKConfig{APIKeys: []string{"known-key"}}}, configPath, manager)
+	req := httptest.NewRequest(http.MethodPatch, "/v0/management/client-api-key-policies", bytes.NewBufferString(`{"match":"known-key","value":{"api-key":"known-key","selected-auth-index":"`+auth.EnsureIndex()+`"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.PatchClientAPIKeyPolicy(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(h.cfg.ClientAPIKeyPolicies) != 1 {
+		t.Fatalf("expected one policy, got %d", len(h.cfg.ClientAPIKeyPolicies))
+	}
+	if got := h.cfg.ClientAPIKeyPolicies[0].SelectedAuthID; got != auth.ID {
+		t.Fatalf("expected selected auth id %q, got %q", auth.ID, got)
+	}
+	if got := h.cfg.ClientAPIKeyPolicies[0].SelectedAuthIndex; got != auth.EnsureIndex() {
+		t.Fatalf("expected selected auth index %q, got %q", auth.EnsureIndex(), got)
+	}
+}
+
+func TestPatchClientAPIKeyPolicyRewritesStaleIndexFromSelectedAuthID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("api-keys:\n  - known-key\nclient-api-key-policies:\n  - api-key: known-key\n    selected-auth-id: auth-1\n    selected-auth-index: stale-index\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	h := NewHandler(&config.Config{SDKConfig: config.SDKConfig{APIKeys: []string{"known-key"}, ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{APIKey: "known-key", SelectedAuthID: auth.ID, SelectedAuthIndex: "stale-index"}}}}, configPath, manager)
+	req := httptest.NewRequest(http.MethodPatch, "/v0/management/client-api-key-policies", bytes.NewBufferString(`{"match":"known-key","value":{"selected-auth-id":"auth-1"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	h.PatchClientAPIKeyPolicy(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := h.cfg.ClientAPIKeyPolicies[0].SelectedAuthIndex; got != auth.EnsureIndex() {
+		t.Fatalf("expected selected auth index %q, got %q", auth.EnsureIndex(), got)
+	}
+}
+
 func TestPatchClientAPIKeyPolicyUpdatesSelectedAuthIndex(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tmpDir := t.TempDir()
@@ -331,7 +393,7 @@ func TestPatchClientAPIKeyPolicyClearsSelectedAuthIndex(t *testing.T) {
 	}
 	h := NewHandler(&config.Config{SDKConfig: config.SDKConfig{
 		APIKeys:              []string{"known-key"},
-		ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{APIKey: "known-key", Alias: "Laptop", SelectedAuthIndex: "auth-1"}},
+		ClientAPIKeyPolicies: []config.ClientAPIKeyPolicy{{APIKey: "known-key", Alias: "Laptop", SelectedAuthID: "auth-id-1", SelectedAuthIndex: "auth-1"}},
 	}}, configPath, nil)
 	req := httptest.NewRequest(http.MethodPatch, "/v0/management/client-api-key-policies", bytes.NewBufferString(`{"match":"known-key","value":{"selected-auth-index":""}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -344,6 +406,9 @@ func TestPatchClientAPIKeyPolicyClearsSelectedAuthIndex(t *testing.T) {
 	}
 	if got := h.cfg.ClientAPIKeyPolicies[0].SelectedAuthIndex; got != "" {
 		t.Fatalf("expected selected auth index to clear, got %q", got)
+	}
+	if got := h.cfg.ClientAPIKeyPolicies[0].SelectedAuthID; got != "" {
+		t.Fatalf("expected selected auth id to clear, got %q", got)
 	}
 }
 
