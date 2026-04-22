@@ -51,6 +51,7 @@ type SDKConfig struct {
 type ClientAPIKeyPolicy struct {
 	APIKey                      string `yaml:"api-key" json:"api-key"`
 	Alias                       string `yaml:"alias,omitempty" json:"alias,omitempty"`
+	SelectedAuthID              string `yaml:"selected-auth-id,omitempty" json:"selected-auth-id,omitempty"`
 	SelectedAuthIndex           string `yaml:"selected-auth-index,omitempty" json:"selected-auth-index,omitempty"`
 	OutputTokenQuota            int64  `yaml:"output-token-quota" json:"output-token-quota"`
 	OutputTokenQuotaResetHours  int    `yaml:"output-token-quota-reset-hours,omitempty" json:"output-token-quota-reset-hours,omitempty"`
@@ -82,6 +83,7 @@ func NormalizeClientAPIKeyPolicies(items []ClientAPIKeyPolicy) []ClientAPIKeyPol
 		}
 		item.APIKey = key
 		item.Alias = strings.TrimSpace(item.Alias)
+		item.SelectedAuthID = strings.TrimSpace(item.SelectedAuthID)
 		item.SelectedAuthIndex = strings.TrimSpace(item.SelectedAuthIndex)
 		item.LegacyOutputTokenQuotaReset = strings.TrimSpace(item.LegacyOutputTokenQuotaReset)
 		if item.LegacyOutputTokenQuotaReset == ClientAPIKeyPolicyQuotaResetWeeklyFromFirstUse {
@@ -147,6 +149,13 @@ func ValidateClientAPIKeyPolicies(apiKeys []string, items []ClientAPIKeyPolicy) 
 			for _, r := range item.SelectedAuthIndex {
 				if r == '\n' || r == '\r' || r == '\t' {
 					return fmt.Errorf("selected-auth-index contains unsupported control characters")
+				}
+			}
+		}
+		if item.SelectedAuthID != "" {
+			for _, r := range item.SelectedAuthID {
+				if r == '\n' || r == '\r' || r == '\t' {
+					return fmt.Errorf("selected-auth-id contains unsupported control characters")
 				}
 			}
 		}

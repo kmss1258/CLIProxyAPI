@@ -26,6 +26,16 @@ func TestNormalizeClientAPIKeyPoliciesTrimsSelectedAuthIndex(t *testing.T) {
 	}
 }
 
+func TestNormalizeClientAPIKeyPoliciesTrimsSelectedAuthID(t *testing.T) {
+	items := NormalizeClientAPIKeyPolicies([]ClientAPIKeyPolicy{{APIKey: "known-key", SelectedAuthID: "  auth-id-123  "}})
+	if len(items) != 1 {
+		t.Fatalf("expected one normalized policy, got %d", len(items))
+	}
+	if got := items[0].SelectedAuthID; got != "auth-id-123" {
+		t.Fatalf("expected trimmed selected auth id, got %q", got)
+	}
+}
+
 func TestValidateClientAPIKeyPoliciesRejectsLongAlias(t *testing.T) {
 	items := []ClientAPIKeyPolicy{{APIKey: "known-key", Alias: "12345678901234567890123456789012345678901234567890123456789012345"}}
 	if err := ValidateClientAPIKeyPolicies([]string{"known-key"}, items); err == nil {
@@ -37,6 +47,13 @@ func TestValidateClientAPIKeyPoliciesRejectsSelectedAuthIndexControlCharacters(t
 	items := []ClientAPIKeyPolicy{{APIKey: "known-key", SelectedAuthIndex: "auth\n-123"}}
 	if err := ValidateClientAPIKeyPolicies([]string{"known-key"}, items); err == nil {
 		t.Fatalf("expected selected auth index with control characters to be rejected")
+	}
+}
+
+func TestValidateClientAPIKeyPoliciesRejectsSelectedAuthIDControlCharacters(t *testing.T) {
+	items := []ClientAPIKeyPolicy{{APIKey: "known-key", SelectedAuthID: "auth\n-id-123"}}
+	if err := ValidateClientAPIKeyPolicies([]string{"known-key"}, items); err == nil {
+		t.Fatalf("expected selected auth id with control characters to be rejected")
 	}
 }
 
@@ -143,6 +160,35 @@ client-api-key-policies:
 	}
 	if len(cfg.ClientAPIKeyPolicies) != 1 {
 		t.Fatalf("expected one policy, got %d", len(cfg.ClientAPIKeyPolicies))
+	}
+	if got := cfg.ClientAPIKeyPolicies[0].SelectedAuthIndex; got != "auth-123" {
+		t.Fatalf("expected selected auth index to persist, got %q", got)
+	}
+}
+
+func TestLoadConfigOptionalPreservesSelectedAuthIDAndIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configYAML := []byte(`
+api-keys:
+  - known-key
+client-api-key-policies:
+  - api-key: known-key
+    selected-auth-id: auth-id-123
+    selected-auth-index: auth-123
+`)
+	if err := os.WriteFile(configPath, configYAML, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfg, err := LoadConfigOptional(configPath, false)
+	if err != nil {
+		t.Fatalf("LoadConfigOptional() error = %v", err)
+	}
+	if len(cfg.ClientAPIKeyPolicies) != 1 {
+		t.Fatalf("expected one policy, got %d", len(cfg.ClientAPIKeyPolicies))
+	}
+	if got := cfg.ClientAPIKeyPolicies[0].SelectedAuthID; got != "auth-id-123" {
+		t.Fatalf("expected selected auth id to persist, got %q", got)
 	}
 	if got := cfg.ClientAPIKeyPolicies[0].SelectedAuthIndex; got != "auth-123" {
 		t.Fatalf("expected selected auth index to persist, got %q", got)
