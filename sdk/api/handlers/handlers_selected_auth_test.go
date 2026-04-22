@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -105,7 +106,20 @@ func registerSelectedAuthTestModel(t *testing.T, auth *coreauth.Auth, model stri
 func TestApplyClientAPIKeySelectedAuthPinsMatchingAuth(t *testing.T) {
 	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
 	registerSelectedAuthTestModel(t, auth, "test-model")
-	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthID: auth.ID, SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	ctx, err := handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"codex"}, "test-model")
+	if err != nil {
+		t.Fatalf("applyClientAPIKeySelectedAuth() error = %v", err)
+	}
+	if got := pinnedAuthIDFromContext(ctx); got != auth.ID {
+		t.Fatalf("pinned auth id = %q, want %q", got, auth.ID)
+	}
+}
+
+func TestApplyClientAPIKeySelectedAuthPinsMatchingAuthByIDOnly(t *testing.T) {
+	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
+	registerSelectedAuthTestModel(t, auth, "test-model")
+	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthID: auth.ID}}, auth)
 	ctx, err := handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"codex"}, "test-model")
 	if err != nil {
 		t.Fatalf("applyClientAPIKeySelectedAuth() error = %v", err)
@@ -136,6 +150,35 @@ func TestApplyClientAPIKeySelectedAuthRejectsMissingAuth(t *testing.T) {
 	}
 }
 
+func TestApplyClientAPIKeySelectedAuthRejectsMissingSelectedAuthIDEvenWithStaleIndex(t *testing.T) {
+	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
+	registerSelectedAuthTestModel(t, auth, "test-model")
+	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthID: "missing-id", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	_, err := handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"codex"}, "test-model")
+	if err == nil {
+		t.Fatalf("expected missing selected auth id to fail")
+	}
+	if !strings.Contains(err.Error(), "selected upstream account ID was not found") {
+		t.Fatalf("expected missing-id reason, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing-id") {
+		t.Fatalf("expected error to mention selected auth id, got %v", err)
+	}
+}
+
+func TestApplyClientAPIKeySelectedAuthUsesIDWhenIndexIsStale(t *testing.T) {
+	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
+	registerSelectedAuthTestModel(t, auth, "test-model")
+	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthID: auth.ID, SelectedAuthIndex: "stale-index"}}, auth)
+	ctx, err := handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"codex"}, "test-model")
+	if err != nil {
+		t.Fatalf("applyClientAPIKeySelectedAuth() error = %v", err)
+	}
+	if got := pinnedAuthIDFromContext(ctx); got != auth.ID {
+		t.Fatalf("pinned auth id = %q, want %q", got, auth.ID)
+	}
+}
+
 func TestApplyClientAPIKeySelectedAuthRejectsUnsupportedModel(t *testing.T) {
 	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
 	registerSelectedAuthTestModel(t, auth, "other-model")
@@ -150,7 +193,7 @@ func TestExecuteWithAuthManagerUsesSelectedAuth(t *testing.T) {
 	executor := &selectedAuthExecuteExecutor{}
 	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
 	registerSelectedAuthTestModel(t, auth, "test-model")
-	handler := selectedAuthTestHandler(t, executor, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	handler := selectedAuthTestHandler(t, executor, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthID: auth.ID, SelectedAuthIndex: auth.EnsureIndex()}}, auth)
 	payload, _, errMsg := handler.ExecuteWithAuthManager(selectedAuthTestContext("client-key"), "openai", "test-model", []byte(`{"model":"test-model"}`), "")
 	if errMsg != nil {
 		t.Fatalf("unexpected error: %+v", errMsg)
@@ -167,7 +210,7 @@ func TestExecuteCountWithAuthManagerUsesSelectedAuth(t *testing.T) {
 	executor := &selectedAuthCountExecutor{}
 	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
 	registerSelectedAuthTestModel(t, auth, "test-model")
-	handler := selectedAuthTestHandler(t, executor, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	handler := selectedAuthTestHandler(t, executor, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthID: auth.ID, SelectedAuthIndex: auth.EnsureIndex()}}, auth)
 	payload, _, errMsg := handler.ExecuteCountWithAuthManager(selectedAuthTestContext("client-key"), "openai", "test-model", []byte(`{"model":"test-model"}`), "")
 	if errMsg != nil {
 		t.Fatalf("unexpected error: %+v", errMsg)
@@ -184,7 +227,7 @@ func TestExecuteStreamWithAuthManagerUsesSelectedAuth(t *testing.T) {
 	executor := &selectedAuthStreamExecutor{}
 	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
 	registerSelectedAuthTestModel(t, auth, "test-model")
-	handler := selectedAuthTestHandler(t, executor, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	handler := selectedAuthTestHandler(t, executor, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthID: auth.ID, SelectedAuthIndex: auth.EnsureIndex()}}, auth)
 	dataChan, _, errChan := handler.ExecuteStreamWithAuthManager(selectedAuthTestContext("client-key"), "openai", "test-model", []byte(`{"model":"test-model"}`), "")
 	if dataChan == nil || errChan == nil {
 		t.Fatalf("expected non-nil channels")

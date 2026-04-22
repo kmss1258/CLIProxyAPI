@@ -57,6 +57,11 @@ type pinnedAuthContextKey struct{}
 type selectedAuthCallbackContextKey struct{}
 type executionSessionContextKey struct{}
 
+type selectedAuthPolicy struct {
+	ID    string
+	Index string
+}
+
 // WithPinnedAuthID returns a child context that requests execution on a specific auth ID.
 func WithPinnedAuthID(ctx context.Context, authID string) context.Context {
 	authID = strings.TrimSpace(authID)
@@ -273,20 +278,26 @@ func (h *BaseAPIHandler) applyClientAPIKeySelectedAuth(ctx context.Context, prov
 	if apiKey == "" {
 		return ctx, nil
 	}
-	selectedAuthIndex := ""
+	policy := selectedAuthPolicy{}
 	for _, item := range h.Cfg.ClientAPIKeyPolicies {
 		if strings.TrimSpace(item.APIKey) != apiKey {
 			continue
 		}
-		selectedAuthIndex = strings.TrimSpace(item.SelectedAuthIndex)
+		policy.ID = strings.TrimSpace(item.SelectedAuthID)
+		policy.Index = strings.TrimSpace(item.SelectedAuthIndex)
 		break
 	}
-	if selectedAuthIndex == "" {
+	if policy.ID == "" && policy.Index == "" {
 		return ctx, nil
 	}
-	selectedAuth := resolveSelectedAuth(h.AuthManager.List(), selectedAuthIndex)
+	resolution := resolveSelectedAuth(h.AuthManager.List(), policy)
+	selectedAuth := resolution.auth
 	if selectedAuth == nil {
-		return ctx, selectedAuthRestrictionError(apiKey, selectedAuthIndex, modelName, "selected upstream account was not found")
+		reason := "selected upstream account was not found"
+		if policy.ID != "" {
+			reason = "selected upstream account ID was not found"
+		}
+		return ctx, selectedAuthRestrictionError(apiKey, policy, modelName, reason)
 	}
 	if !authSupportsRequest(selectedAuth, providers, modelName) {
 		reason := "selected upstream account cannot serve the requested model"
@@ -295,25 +306,42 @@ func (h *BaseAPIHandler) applyClientAPIKeySelectedAuth(ctx context.Context, prov
 		} else if selectedAuth.Unavailable {
 			reason = "selected upstream account is unavailable"
 		}
-		return ctx, selectedAuthRestrictionError(apiKey, selectedAuthIndex, modelName, reason)
+		return ctx, selectedAuthRestrictionError(apiKey, policy, modelName, reason)
 	}
 	return WithPinnedAuthID(ctx, selectedAuth.ID), nil
 }
 
-func resolveSelectedAuth(auths []*coreauth.Auth, selectedAuthIndex string) *coreauth.Auth {
-	selectedAuthIndex = strings.TrimSpace(selectedAuthIndex)
-	if selectedAuthIndex == "" {
-		return nil
+type selectedAuthResolution struct {
+	auth       *coreauth.Auth
+	resolvedBy string
+}
+
+func resolveSelectedAuth(auths []*coreauth.Auth, policy selectedAuthPolicy) selectedAuthResolution {
+	policy.ID = strings.TrimSpace(policy.ID)
+	policy.Index = strings.TrimSpace(policy.Index)
+	if policy.ID == "" && policy.Index == "" {
+		return selectedAuthResolution{}
+	}
+	if policy.ID != "" {
+		for _, auth := range auths {
+			if auth == nil {
+				continue
+			}
+			if strings.TrimSpace(auth.ID) == policy.ID {
+				return selectedAuthResolution{auth: auth, resolvedBy: "id"}
+			}
+		}
+		return selectedAuthResolution{}
 	}
 	for _, auth := range auths {
 		if auth == nil {
 			continue
 		}
-		if strings.TrimSpace(auth.EnsureIndex()) == selectedAuthIndex {
-			return auth
+		if strings.TrimSpace(auth.EnsureIndex()) == policy.Index {
+			return selectedAuthResolution{auth: auth, resolvedBy: "index"}
 		}
 	}
-	return nil
+	return selectedAuthResolution{}
 }
 
 func authSupportsRequest(auth *coreauth.Auth, providers []string, modelName string) bool {
@@ -351,8 +379,12 @@ func authSupportsRequest(auth *coreauth.Auth, providers []string, modelName stri
 	return false
 }
 
-func selectedAuthRestrictionError(apiKey, selectedAuthIndex, modelName, reason string) error {
-	message := fmt.Sprintf("client api key %q is restricted to upstream account %q for model %q: %s", apiKey, selectedAuthIndex, modelName, reason)
+func selectedAuthRestrictionError(apiKey string, policy selectedAuthPolicy, modelName, reason string) error {
+	selectedRef := strings.TrimSpace(policy.ID)
+	if selectedRef == "" {
+		selectedRef = strings.TrimSpace(policy.Index)
+	}
+	message := fmt.Sprintf("client api key %q is restricted to upstream account %q for model %q: %s", apiKey, selectedRef, modelName, reason)
 	return &coreauth.Error{Code: "selected_auth_unavailable", Message: message, HTTPStatus: http.StatusServiceUnavailable}
 }
 
