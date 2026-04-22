@@ -23,6 +23,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/app" -w /app golang:1.26-al
 docker compose up -d --build --pull never cli-proxy-api
 ```
 - In this workspace, the locally running `cli-proxy-api` service is exposed through the existing reverse-proxy setup, so rebuilding/restarting the local service updates the live `https://cpa.exusio.uk` routes that point at this host. When verifying dashboard changes, treat the local compose service as the live backend and confirm the running container is using the rebuilt local image rather than the published `eceasy/cli-proxy-api:latest` image.
+- In practice for this workspace, treat `https://cpa.exusio.uk` as the user's local server: if the local compose stack was rebuilt and restarted correctly, the same code is what the live host is serving.
 - For routine local work in this workspace, use branches prefixed with `quota-concurrency-ui-`.
 - In this workspace, routine commit/push steps for that branch line may proceed without separate user approval once implementation is requested; upstream cleanup, rebasing, and branch-history shaping can be handled later as a separate step.
 - Common flags: `--config <path>`, `--tui`, `--standalone`, `--local-model`, `--no-browser`, `--oauth-callback-port <port>`

@@ -803,3 +803,183 @@ If local Go is unavailable, use the Docker fallback documented in `AGENTS.md`.
 7. `test: add native Claude Code acceptance coverage`
 8. `test: add LiteLLM comparison harness`
 9. `feat: prototype Claude-to-OpenAI compatibility track` 
+
+---
+
+## Selected auth recurrence-prevention plan
+
+### Goal
+
+Prevent stale or mismatched `selected-auth-index` failures from recurring when auth files are regenerated, reloaded through different code paths, or updated while a client API key remains pinned to a specific upstream account.
+
+### Problem summary
+
+The current risk is not only "wrong plan type" or "wrong model list".
+The deeper problem is that selected-auth pinning depends on a derived identity (`EnsureIndex`) whose seed can differ depending on how the same auth material is loaded.
+
+Key current seams:
+
+- `sdk/cliproxy/auth/types.go`
+  - `stableAuthIndex()`
+  - `(*Auth).indexSeed()`
+  - `(*Auth).EnsureIndex()`
+- `sdk/auth/filestore.go`
+  - file-backed auth loading with `FileName` populated
+- `internal/watcher/synthesizer/file.go`
+  - watcher/file synthesis path with `source/path` attributes and Codex `plan_type` extraction
+- `sdk/cliproxy/auth/conductor.go`
+  - `Manager.Register()`
+  - `Manager.Update()`
+  - `Manager.Load()`
+- `sdk/api/handlers/handlers.go`
+  - `applyClientAPIKeySelectedAuth()`
+  - `resolveSelectedAuth()`
+  - `authSupportsRequest()`
+
+---
+
+## 3-layer defense strategy
+
+### Layer 1 - Prevention by design (primary implementation priority)
+
+#### Objective
+
+Stop using a runtime-derived index as the long-term source of truth for selected-auth pinning.
+
+#### Preferred direction
+
+Persist a canonical auth identifier in client API key policy instead of relying only on `selected-auth-index`.
+
+Recommended shape:
+
+- add a stable policy field such as `selected-auth-id`
+- treat `selected-auth-index` as a UI/display convenience or migration aid
+- resolve in this order:
+  1. `selected-auth-id`
+  2. fallback legacy `selected-auth-index`
+
+#### Why this is the highest-priority fix
+
+- `auth.ID` is much less sensitive to loading-path differences than `EnsureIndex()`
+- file-backed auth and watcher-synthesized auth can disagree on index seed inputs
+- config can keep a stable pointer even if index derivation changes later
+
+#### Target files
+
+- `internal/config/sdk_config.go`
+- `internal/api/handlers/management/client_api_key_policies.go`
+- `internal/api/handlers/management/quota_status.go`
+- `sdk/api/handlers/handlers.go`
+- `internal/api/assets/quota.html`
+
+#### Minimum implementation requirements
+
+- Add `selected-auth-id` to policy schema and normalization/validation.
+- Management PATCH/GET must read/write the new field.
+- Runtime selected-auth resolution must first try `selected-auth-id` by direct auth ID match.
+- Legacy `selected-auth-index` must continue working during migration.
+- Quota/status payload must expose both the selected auth ID and the selected auth index so operators can see mismatches clearly.
+
+---
+
+### Layer 2 - Runtime drift handling and operator response
+
+#### Objective
+
+Even if config or auth state drifts, fail loudly and make recovery obvious instead of leaving operators to guess.
+
+#### Required protections
+
+1. **Explicit stale-selection surfacing**
+   - If selected auth cannot be resolved, return a clear error that distinguishes:
+     - selected auth ID missing
+     - selected auth index missing
+     - auth found but model unsupported
+     - auth found but disabled/unavailable
+
+2. **Quota/management visibility**
+   - Include these fields in quota/status views where applicable:
+     - `selected_auth_id`
+     - `selected_auth_index`
+     - `selected_auth_label`
+     - `selected_auth_provider`
+     - `selected_auth_missing`
+     - `selected_auth_disabled`
+     - optional mismatch indicator if ID and index no longer point to the same auth
+
+3. **Safe migration behavior**
+   - When legacy `selected-auth-index` resolves to nothing but `selected-auth-id` resolves correctly, continue with the resolved auth.
+   - When only legacy index exists and fails, surface an actionable error instead of a generic service failure.
+
+4. **Operational rule**
+   - After deleting/recreating an auth file, selected-auth bindings must be rechecked before relying on pinned routing.
+
+#### Target files
+
+- `sdk/api/handlers/handlers.go`
+- `internal/api/handlers/management/quota_status.go`
+- optional management helpers if needed
+
+---
+
+### Layer 3 - Tests and release gate (non-negotiable)
+
+#### Objective
+
+Turn this class of issue into a repeatable regression test instead of an operator surprise.
+
+#### Test strategy
+
+1. **Identity parity tests**
+   - Verify equivalent auth material loaded through different paths does not silently break selected-auth semantics.
+   - Compare file-backed and watcher-synthesized auth resolution assumptions.
+
+2. **Policy resolution tests**
+   - `selected-auth-id` resolves correctly.
+   - legacy `selected-auth-index` fallback resolves correctly.
+   - stale index + valid ID still succeeds.
+   - missing ID/index produces the expected explicit error.
+
+3. **Model support tests**
+   - selected auth found + supported model -> success
+   - selected auth found + unsupported model -> explicit model-unavailable path
+   - selected auth disabled/unavailable -> explicit disabled/unavailable path
+
+4. **Quota/management payload tests**
+   - selected auth metadata reflects the same auth runtime resolution will use
+   - stale/missing states are visible in payloads
+
+5. **Manual release gate**
+   - Before shipping any selected-auth-related change, run all of:
+     - text request using a pinned key
+     - target model request using the same pinned key
+     - image request using the same pinned key
+     - quota/status inspection confirming the selected auth metadata matches the intended upstream account
+
+#### Candidate test files
+
+- `sdk/api/handlers/handlers_selected_auth_test.go`
+- `internal/api/handlers/management/quota_status_test.go`
+- new parity test near watcher/filestore auth loading if needed
+- optional integration coverage in `test/`
+
+---
+
+## Recommended implementation order
+
+1. Add `selected-auth-id` to policy schema and runtime resolution.
+2. Preserve legacy `selected-auth-index` as fallback only.
+3. Expand quota/management payloads to expose both ID and index.
+4. Add stale-binding and parity regression tests.
+5. Add a release checklist note so selected-auth changes always get real pinned-key smoke tests.
+
+---
+
+## Acceptance criteria for the next implementation turn
+
+- A client API key policy can pin by stable auth ID.
+- Existing legacy policies using only `selected-auth-index` still work.
+- If auth files are recreated and runtime index changes, a policy using `selected-auth-id` continues to resolve the intended auth.
+- Quota/management surfaces make stale or missing selected-auth bindings obvious.
+- Automated tests cover stale index fallback, ID-based resolution, and mismatch visibility.
+- Manual QA demonstrates pinned-key success for text, target model, and image requests.
