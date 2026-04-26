@@ -983,3 +983,205 @@ Turn this class of issue into a repeatable regression test instead of an operato
 - Quota/management surfaces make stale or missing selected-auth bindings obvious.
 - Automated tests cover stale index fallback, ID-based resolution, and mismatch visibility.
 - Manual QA demonstrates pinned-key success for text, target model, and image requests.
+
+---
+
+## Usage persistence plan (snapshot/checkpoint strategy)
+
+### Goal
+
+Prevent API-key usage and detailed request statistics from appearing to reset after a server restart, without turning every read into a heavy live SQLite aggregation.
+
+### Current behavior summary
+
+There are two different usage paths today:
+
+1. **Quota usage path**
+   - `internal/quota/manager.go`
+   - backed by `client_key_usage` in SQLite
+   - survives restart already
+
+2. **Detailed request statistics path**
+   - `internal/usage/logger_plugin.go`
+   - in-memory `RequestStatistics`
+   - reset on process restart
+   - management views can partially rehydrate from `request_logs`, but that is fallback behavior, not a durable snapshot design
+
+### Why choose the middle strategy
+
+We do not want:
+
+- a fully in-memory model that loses visibility after restart
+- or a fully live SQLite aggregation model that recalculates everything on every read
+
+The middle strategy is:
+
+- keep request-time aggregation in memory for normal fast operation
+- periodically checkpoint a compact usage snapshot into SQLite
+- rehydrate that snapshot on startup
+
+This gives restart resilience with limited additional SQLite cost.
+
+---
+
+## 3-part plan
+
+### Part 1 - Snapshot persistence implementation
+
+#### Objective
+
+Persist a compact copy of `RequestStatistics` to SQLite on a schedule and/or controlled lifecycle events.
+
+#### Recommended design
+
+Add a dedicated snapshot table for aggregated usage, separate from raw `request_logs`.
+
+Candidate table shape:
+
+- `usage_snapshots`
+  - `scope` or fixed singleton key
+  - `snapshot_json`
+  - `updated_at`
+
+Recommended behavior:
+
+1. keep `RequestStatistics` as the hot in-memory store
+2. periodically serialize `StatisticsSnapshot`
+3. save the latest snapshot as a single-row replace/update in SQLite
+4. on startup, load the latest snapshot and `MergeSnapshot()` into the in-memory store
+
+#### Trigger strategy
+
+Prefer low-frequency checkpointing instead of per-request writes.
+
+Recommended checkpoint triggers:
+
+- periodic background interval, for example every 30-120 seconds
+- graceful server shutdown if there is an existing shutdown hook path
+- optional forced flush after management-triggered operations if useful later
+
+#### Target files
+
+- `internal/usage/logger_plugin.go`
+- `internal/quota/sqlite_store.go`
+- `internal/quota/manager.go`
+- `internal/api/handlers/management/quota_status.go` (only if fallback order needs adjustment)
+- server/bootstrap wiring where background routines are started
+
+#### Minimum implementation requirements
+
+- Add snapshot store/load methods in SQLite store.
+- Add a periodic checkpoint loop for `RequestStatistics`.
+- Load the last snapshot on startup before serving requests.
+- Ensure duplicate merging does not inflate counters after restart.
+
+---
+
+### Part 2 - Operational response and safety controls
+
+#### Objective
+
+Keep the snapshot system lightweight and predictable.
+
+#### Required controls
+
+1. **Single-row snapshot persistence**
+   - Always overwrite the latest aggregate snapshot instead of appending unbounded rows.
+
+2. **Bounded write frequency**
+   - Do not checkpoint on every request.
+   - Use a timer-based or dirty-flag-based checkpoint trigger.
+
+3. **Startup precedence clarity**
+   - On restart, restore usage statistics from the persisted snapshot first.
+   - Keep raw `request_logs` fallback as a secondary recovery path, not the primary persistence story.
+
+4. **Failure containment**
+   - If snapshot write fails, request serving must continue.
+   - Emit a clear log warning instead of failing the server.
+
+5. **Future config knob (optional, not required in first slice)**
+   - Later, if needed, expose a checkpoint interval setting.
+   - Not required for the first implementation if a safe default is used.
+
+#### Expected resource impact
+
+This should be much lighter than live aggregation from raw logs because:
+
+- writes are periodic, not per request
+- the snapshot is compact and single-row
+- reads on restart are one snapshot load instead of repeated wide scans
+
+---
+
+### Part 3 - Tests and release gate
+
+#### Objective
+
+Prove that restart no longer wipes the detailed usage view in practice.
+
+#### Automated tests
+
+1. **SQLite snapshot round-trip test**
+   - write a `StatisticsSnapshot`
+   - load it back
+   - verify totals and nested model details match
+
+2. **Manager/bootstrap rehydrate test**
+   - seed a snapshot in SQLite
+   - create a fresh in-memory statistics store
+   - run startup rehydrate logic
+   - confirm counters are restored
+
+3. **Checkpoint overwrite test**
+   - write one snapshot
+   - write a newer snapshot
+   - verify only the latest aggregate state is restored
+
+4. **Failure-tolerant checkpoint test**
+   - simulate SQLite write failure
+   - verify request handling continues and the failure is surfaced safely
+
+5. **No double-counting test**
+   - restore snapshot
+   - continue recording new requests
+   - ensure old data is not counted twice after subsequent checkpoint/load cycles
+
+#### Manual QA
+
+Before shipping:
+
+1. send a few requests on a test key
+2. confirm usage appears in quota/usage views
+3. restart with `docker compose down && docker compose up -d --build --pull never`
+4. reload quota/usage views
+5. confirm detailed usage is still present after restart
+
+#### Candidate test files
+
+- `internal/usage/logger_plugin_test.go`
+- `internal/api/handlers/management/usage_test.go`
+- `internal/api/handlers/management/quota_status_test.go`
+- new SQLite snapshot tests near `internal/quota/sqlite_store.go`
+
+---
+
+## Recommended implementation order
+
+1. Add snapshot table and store/load helpers in SQLite.
+2. Add `RequestStatistics` checkpoint serialization helpers.
+3. Add startup rehydrate path.
+4. Add periodic checkpoint loop.
+5. Add restart persistence tests.
+6. Validate with real restart via docker compose.
+
+---
+
+## Acceptance criteria for the implementation turn
+
+- Detailed usage stats no longer appear empty after a normal server restart.
+- Quota usage remains correct and unchanged from current behavior.
+- Snapshot persistence does not require per-request SQLite writes.
+- Startup rehydrate uses the persisted snapshot successfully.
+- Tests cover snapshot round-trip, overwrite behavior, restart restore, and no double-counting.
+- Manual QA confirms visible usage continuity across `docker compose` restart.
