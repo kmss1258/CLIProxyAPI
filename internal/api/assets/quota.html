@@ -1902,6 +1902,7 @@
         var rows = Array.isArray(currentAuthFiles) ? currentAuthFiles : [];
         return rows.reduce(function (list, item) {
           var authIndex = String(item && item.auth_index || "").trim();
+          var authID = String(item && (item.id || item.auth_id) || "").trim();
           var label;
           var provider;
           var optionLabel;
@@ -1912,6 +1913,7 @@
           optionLabel = authIndex + " · " + (provider ? provider + " · " : "") + label;
           if (item && item.disabled) optionLabel += " · 비활성화";
           list.push({
+            authID: authID,
             authIndex: authIndex,
             label: label,
             provider: provider,
@@ -1934,23 +1936,45 @@
         return null;
       }
 
+      function findSelectableAuthFileByID(authID) {
+        var target = String(authID || "").trim();
+        var options;
+        var i;
+        if (!target) return null;
+        options = listSelectableAuthFiles();
+        for (i = 0; i < options.length; i += 1) {
+          if (String(options[i].authID || "").trim() === target) return options[i];
+        }
+        return null;
+      }
+
       function getQuotaSelectedAuthState(item) {
+        var selectedAuthID = String(item && item.selected_auth_id || "").trim();
         var selectedAuthIndex = String(item && item.selected_auth_index || "").trim();
-        var selectedOption = findSelectableAuthFile(selectedAuthIndex);
+        var resolvedVia = String(item && item.selected_auth_resolved_via || "").trim();
+        var mismatch = !!(item && item.selected_auth_mismatch);
+        var selectedOption = selectedAuthID ? findSelectableAuthFileByID(selectedAuthID) : null;
+        if (!selectedOption) selectedOption = findSelectableAuthFile(selectedAuthIndex);
         var selectedAuthLabel = String(item && item.selected_auth_label || (selectedOption && selectedOption.label) || "").trim();
         var selectedAuthProvider = String(item && item.selected_auth_provider || (selectedOption && selectedOption.provider) || "").trim();
         var selectedAuthDisabled = !!(item && item.selected_auth_disabled) || !!(selectedOption && selectedOption.disabled);
-        var selectedAuthMissing = !!(item && item.selected_auth_missing) || (!!selectedAuthIndex && !selectedOption);
+        var selectedAuthMissing = !!(item && item.selected_auth_missing) || (!!(selectedAuthID || selectedAuthIndex) && !selectedOption);
         var currentLabel = [selectedAuthProvider, selectedAuthLabel].filter(Boolean).join(" · ");
         var warningText = "";
         var warningTone = "neutral";
         var summaryTone = "neutral";
+        var currentAuthIndex = String(selectedOption && selectedOption.authIndex || "").trim();
+        var currentAuthID = String(selectedOption && selectedOption.authID || "").trim();
 
         if (!currentLabel && selectedAuthIndex) currentLabel = selectedAuthIndex;
         if (selectedAuthMissing) {
           warningText = "현재 지정된 연동 계정을 찾을 수 없습니다. 기존 모드로 저장하거나 다른 계정을 선택하세요.";
           warningTone = "bad";
           summaryTone = "bad";
+        } else if (mismatch) {
+          warningText = "저장된 auth_index가 현재 계정 상태와 어긋났습니다. 현재는 auth ID 기준으로 복구된 상태이며, 다시 저장하면 최신 값으로 동기화됩니다.";
+          warningTone = "warn";
+          summaryTone = "warn";
         } else if (selectedAuthDisabled) {
           warningText = "현재 지정된 연동 계정이 비활성화 상태입니다. 다른 계정으로 바꾸거나 기존 모드로 저장하세요.";
           warningTone = "warn";
@@ -1958,13 +1982,18 @@
         }
 
         return {
+          selectedAuthID: selectedAuthID,
           selectedAuthIndex: selectedAuthIndex,
+          selectedAuthResolvedVia: resolvedVia,
+          selectedAuthMismatch: mismatch,
           selectedAuthLabel: selectedAuthLabel,
           selectedAuthProvider: selectedAuthProvider,
           selectedAuthDisabled: selectedAuthDisabled,
           selectedAuthMissing: selectedAuthMissing,
+          currentAuthID: currentAuthID,
+          currentAuthIndex: currentAuthIndex,
           currentLabel: currentLabel,
-          hasSelection: !!selectedAuthIndex,
+          hasSelection: !!(selectedAuthID || selectedAuthIndex),
           optionFound: !!selectedOption,
           summaryTone: summaryTone,
           warningText: warningText,
@@ -2129,12 +2158,15 @@
         head.appendChild(title);
 
         summary = el("div", "quota-admin-summary");
-        summary.appendChild(createBadge(state.hasSelection ? "선택됨 " + state.selectedAuthIndex : "기존 모드", state.summaryTone));
-        if (state.hasSelection && state.currentLabel && state.currentLabel !== state.selectedAuthIndex) {
+        summary.appendChild(createBadge(state.hasSelection ? "선택됨 " + (state.currentAuthIndex || state.selectedAuthIndex || state.selectedAuthID) : "기존 모드", state.summaryTone));
+        if (state.hasSelection && state.currentLabel && state.currentLabel !== (state.currentAuthIndex || state.selectedAuthIndex)) {
           summary.appendChild(createBadge(state.currentLabel, "neutral"));
         }
+        if (state.selectedAuthID) {
+          summary.appendChild(createBadge("ID " + state.selectedAuthID, "neutral"));
+        }
         if (state.warningText) {
-          summary.appendChild(createBadge(state.selectedAuthMissing ? "연결 대상 없음" : "비활성 계정", state.warningTone));
+          summary.appendChild(createBadge(state.selectedAuthMissing ? "연결 대상 없음" : (state.selectedAuthMismatch ? "index drift" : "비활성 계정"), state.warningTone));
         }
         head.appendChild(summary);
         panel.appendChild(head);
@@ -2164,17 +2196,18 @@
           optionNode.textContent = option.optionLabel;
           selectInput.appendChild(optionNode);
         });
-        selectInput.value = state.hasSelection ? state.selectedAuthIndex : "";
+        selectInput.value = state.hasSelection ? (state.currentAuthIndex || state.selectedAuthIndex) : "";
         selectField.appendChild(selectInput);
         controls.appendChild(selectField);
 
-        note = el("p", "compact-admin-settings-note", "빈 값으로 저장하면 기존 모드로 돌아갑니다. 목록은 auth_index 기준으로 보여줍니다.");
+        note = el("p", "compact-admin-settings-note", state.selectedAuthMismatch ? "현재는 auth ID 기준으로 올바른 계정을 찾았습니다. 다시 저장하면 최신 auth_index로 동기화됩니다." : "빈 값으로 저장하면 기존 모드로 돌아갑니다. 목록은 auth_index 기준으로 보여줍니다.");
         controls.appendChild(note);
 
         saveButton = el("button", "button", "선택 저장");
         saveButton.type = "button";
         saveButton.addEventListener("click", function () {
-          saveAPIKeySelectedAuth(apiKey, selectInput.value, saveButton);
+          var selectedOption = options.filter(function (option) { return option.authIndex === String(selectInput.value || "").trim(); })[0] || null;
+          saveAPIKeySelectedAuth(apiKey, selectInput.value, selectedOption ? selectedOption.authID : "", saveButton);
         });
         controls.appendChild(saveButton);
         panel.appendChild(controls);
@@ -2428,10 +2461,11 @@
         }
       }
 
-      async function saveAPIKeySelectedAuth(apiKey, selectedAuthIndex, button) {
+      async function saveAPIKeySelectedAuth(apiKey, selectedAuthIndex, selectedAuthID, button) {
         var key = keyInput.value.trim();
         var targetAPIKey = String(apiKey || "").trim();
         var targetSelectedAuthIndex = String(selectedAuthIndex || "").trim();
+        var targetSelectedAuthID = String(selectedAuthID || "").trim();
         var previousDisabled = button ? button.disabled : false;
         var response;
         var text;
@@ -2458,7 +2492,7 @@
             },
             cache: "no-store",
             credentials: "same-origin",
-            body: JSON.stringify({ match: targetAPIKey, value: { "api-key": targetAPIKey, "selected-auth-index": targetSelectedAuthIndex } })
+            body: JSON.stringify({ match: targetAPIKey, value: { "api-key": targetAPIKey, "selected-auth-id": targetSelectedAuthID, "selected-auth-index": targetSelectedAuthIndex } })
           });
           text = await response.text();
           data = null;
