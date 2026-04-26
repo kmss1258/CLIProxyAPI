@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,9 +20,12 @@ import (
 	internallogging "github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
+	internalusage "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
+	sdkhandlers "github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -55,6 +60,11 @@ func (e *claudeRouteTestExecutor) HttpRequest(context.Context, *auth.Auth, *http
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
+	return newTestServerWithOptions(t)
+}
+
+func newTestServerWithOptions(t *testing.T, opts ...ServerOption) *Server {
+	t.Helper()
 
 	gin.SetMode(gin.TestMode)
 
@@ -79,7 +89,7 @@ func newTestServer(t *testing.T) *Server {
 	accessManager := sdkaccess.NewManager()
 
 	configPath := filepath.Join(tmpDir, "config.yaml")
-	return NewServer(cfg, authManager, accessManager, configPath)
+	return NewServer(cfg, authManager, accessManager, configPath, opts...)
 }
 
 func newClaudeRouteTestServer(t *testing.T, modelID string) *Server {
@@ -147,6 +157,96 @@ func TestQuotaHTML(t *testing.T) {
 	}
 	if body := rr.Body.String(); !strings.Contains(body, `<link rel="icon" href="/favicon.ico" type="image/x-icon">`) {
 		t.Fatalf("quota page body missing favicon link: %s", body)
+	}
+}
+
+func TestServerStopFlushesUsageRecordedDuringGracefulShutdown(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	requestFinished := make(chan struct{})
+	server := newTestServerWithOptions(t, WithRouterConfigurator(func(engine *gin.Engine, _ *sdkhandlers.BaseAPIHandler, _ *proxyconfig.Config) {
+		engine.GET("/slow-usage", func(c *gin.Context) {
+			close(requestStarted)
+			<-releaseRequest
+			internalusage.GetRequestStatistics().Record(context.Background(), coreusage.Record{
+				APIKey:      "shutdown-key",
+				Model:       "gpt-5.4",
+				RequestedAt: time.Date(2026, 4, 23, 13, 0, 0, 0, time.UTC),
+				Detail: coreusage.Detail{
+					InputTokens:  2,
+					OutputTokens: 3,
+					TotalTokens:  5,
+				},
+			})
+			close(requestFinished)
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+		})
+	}))
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+	server.server.Addr = listener.Addr().String()
+	serveErrCh := make(chan error, 1)
+	go func() {
+		errServe := server.server.Serve(listener)
+		if errServe != nil && !errors.Is(errServe, http.ErrServerClosed) {
+			serveErrCh <- errServe
+			return
+		}
+		serveErrCh <- nil
+	}()
+
+	respCh := make(chan error, 1)
+	go func() {
+		resp, errDo := http.Get("http://" + listener.Addr().String() + "/slow-usage")
+		if errDo != nil {
+			respCh <- errDo
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			respCh <- errors.New(resp.Status)
+			return
+		}
+		respCh <- nil
+	}()
+
+	<-requestStarted
+	stopErrCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		stopErrCh <- server.Stop(ctx)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	close(releaseRequest)
+	<-requestFinished
+	if err := <-respCh; err != nil {
+		t.Fatalf("request error = %v", err)
+	}
+	if err := <-stopErrCh; err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if err := <-serveErrCh; err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+
+	snapshot, ok, err := quota.DefaultManager().LoadUsageSnapshot()
+	if err != nil {
+		t.Fatalf("LoadUsageSnapshot() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected persisted usage snapshot after graceful shutdown")
+	}
+	apiSnapshot, exists := snapshot.APIs["shutdown-key"]
+	if !exists {
+		t.Fatalf("expected shutdown-key usage to be persisted, got %#v", snapshot.APIs)
+	}
+	if apiSnapshot.TotalRequests != 1 || apiSnapshot.TotalTokens != 5 {
+		t.Fatalf("unexpected persisted api snapshot: %#v", apiSnapshot)
 	}
 }
 
@@ -301,6 +401,30 @@ func TestV1ModelsIncludesClaudeModel(t *testing.T) {
 	}
 	if body := rr.Body.String(); !strings.Contains(body, "claude-sonnet-latest") {
 		t.Fatalf("expected claude model in models response, got %s", body)
+	}
+}
+
+func TestOpenAIImageRoutesRegistered(t *testing.T) {
+	server := newTestServer(t)
+	routes := []struct {
+		path string
+		body string
+	}{
+		{path: "/v1/images/generations", body: `{}`},
+		{path: "/v1/images/edits", body: `{}`},
+	}
+
+	for _, tc := range routes {
+		t.Run(tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewBufferString(tc.body))
+			req.Header.Set("Authorization", "Bearer test-key")
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			server.engine.ServeHTTP(rr, req)
+			if rr.Code == http.StatusNotFound {
+				t.Fatalf("expected route to be registered, got 404 for %s", tc.path)
+			}
+		})
 	}
 }
 

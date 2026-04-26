@@ -191,12 +191,15 @@ type Server struct {
 
 	localPassword string
 
-	keepAliveEnabled   bool
-	keepAliveTimeout   time.Duration
-	keepAliveOnTimeout func()
-	keepAliveHeartbeat chan struct{}
-	keepAliveStop      chan struct{}
+	keepAliveEnabled    bool
+	keepAliveTimeout    time.Duration
+	keepAliveOnTimeout  func()
+	keepAliveHeartbeat  chan struct{}
+	keepAliveStop       chan struct{}
+	usageCheckpointStop chan struct{}
 }
+
+const usageSnapshotCheckpointInterval = time.Minute
 
 // NewServer creates and initializes a new API server instance.
 // It sets up the Gin engine, middleware, routes, and handlers.
@@ -279,6 +282,11 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if errUpdateQuota := quota.DefaultManager().UpdateConfig(cfg, configFilePath); errUpdateQuota != nil {
 		log.WithError(errUpdateQuota).Warn("failed to initialise quota manager")
 	}
+	if _, restored, errRestoreUsage := quota.DefaultManager().RestoreUsageStatistics(usage.GetRequestStatistics()); errRestoreUsage != nil {
+		log.WithError(errRestoreUsage).Warn("failed to restore usage statistics snapshot")
+	} else if restored {
+		log.Debug("restored usage statistics snapshot from sqlite checkpoint")
+	}
 	concurrency.DefaultManager().UpdateConfig(cfg)
 	if authManager != nil {
 		authManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
@@ -319,6 +327,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if optionState.routerConfigurator != nil {
 		optionState.routerConfigurator(engine, s.handlers, cfg)
 	}
+	s.startUsageSnapshotCheckpointLoop()
 
 	// Register management routes when configuration or environment secrets are available,
 	// or when a local management password is provided (e.g. TUI mode).
@@ -368,6 +377,8 @@ func (s *Server) setupRoutes() {
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
 		v1.POST("/completions", openaiHandlers.Completions)
+		v1.POST("/images/generations", openaiHandlers.ImagesGenerations)
+		v1.POST("/images/edits", openaiHandlers.ImagesEdits)
 		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 		v1.POST("/messages/count_tokens", claudeCodeHandlers.ClaudeCountTokens)
 		v1.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
@@ -868,12 +879,46 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 
 	// Shutdown the HTTP server.
-	if err := s.server.Shutdown(ctx); err != nil {
+	err := s.server.Shutdown(ctx)
+	if s != nil && s.usageCheckpointStop != nil {
+		select {
+		case s.usageCheckpointStop <- struct{}{}:
+		default:
+		}
+	}
+	s.flushUsageSnapshotCheckpoint()
+	if err != nil {
 		return fmt.Errorf("failed to shutdown HTTP server: %v", err)
 	}
 
 	log.Debug("API server stopped")
 	return nil
+}
+
+func (s *Server) startUsageSnapshotCheckpointLoop() {
+	if s == nil || s.usageCheckpointStop != nil {
+		return
+	}
+	stop := make(chan struct{}, 1)
+	s.usageCheckpointStop = stop
+	go func(stopCh <-chan struct{}) {
+		ticker := time.NewTicker(usageSnapshotCheckpointInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.flushUsageSnapshotCheckpoint()
+			case <-stopCh:
+				return
+			}
+		}
+	}(stop)
+}
+
+func (s *Server) flushUsageSnapshotCheckpoint() {
+	if err := quota.DefaultManager().StoreUsageSnapshot(usage.GetRequestStatistics()); err != nil {
+		log.WithError(err).Warn("failed to persist usage statistics snapshot")
+	}
 }
 
 // corsMiddleware returns a Gin middleware handler that adds CORS headers
