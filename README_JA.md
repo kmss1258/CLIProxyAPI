@@ -53,7 +53,7 @@ GLM CODING PLANを10%割引で取得：https://z.ai/subscribe?ic=8JVLJQFSKB
 - プロバイダールーティングによるAmp CLIおよびIDE拡張機能のサポート
 - ストリーミングおよび非ストリーミングレスポンス
 - 関数呼び出し/ツールのサポート
-- マルチモーダル入力サポート（テキストと画像）
+- マルチモーダル入力サポート（テキストと画像）に加えて、OpenAI互換の画像生成/編集エンドポイント（`/v1/images/generations`、`/v1/images/edits`）
 - ラウンドロビン負荷分散による複数アカウント対応（Gemini、OpenAI、Claude）
 - シンプルなCLI認証フロー（Gemini、OpenAI、Claude）
 - Generative Language APIキーのサポート
@@ -90,6 +90,7 @@ CLIProxyAPIは[Amp CLI](https://ampcode.com)およびAmp IDE拡張機能の統�
 - messages 系のバックエンドには `/api/provider/{provider}/v1/messages`
 - モデル単位の generate 系エンドポイントには `/api/provider/{provider}/v1beta/models/...`
 - chat-completions 系のバックエンドには `/api/provider/{provider}/v1/chat/completions`
+- OpenAI 形式の画像生成/編集バックエンドには `/api/provider/{provider}/v1/images/generations` と `/api/provider/{provider}/v1/images/edits`
 
 これらのパスはプロトコル面の選択には役立ちますが、同じクライアント向けモデル名が複数バックエンドで再利用されている場合、それだけで推論実行系が一意に固定されるわけではありません。実際の推論ルーティングは、引き続きリクエスト内の model/alias 解決に従います。厳密にバックエンドを固定したい場合は、一意な alias や prefix を使うか、クライアント向けモデル名の重複自体を避けてください。
 

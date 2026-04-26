@@ -53,7 +53,7 @@ GLM CODING PLAN 是专为AI编码打造的订阅套餐，每月最低仅需20元
 - 新增 Claude Code 支持（OAuth 登录）
 - 支持流式与非流式响应
 - 函数调用/工具支持
-- 多模态输入（文本、图片）
+- 多模态输入（文本、图片），以及 OpenAI 兼容的图片生成/编辑端点（`/v1/images/generations`、`/v1/images/edits`）
 - 多账户支持与轮询负载均衡（Gemini、OpenAI、Claude）
 - 简单的 CLI 身份验证流程（Gemini、OpenAI、Claude）
 - 支持 Gemini AIStudio API 密钥
@@ -89,6 +89,7 @@ CLIProxyAPI 已内置对 [Amp CLI](https://ampcode.com) 和 Amp IDE 扩展的支
 - 对于 messages 风格的后端，使用 `/api/provider/{provider}/v1/messages`。
 - 对于按模型路径暴露生成接口的后端，使用 `/api/provider/{provider}/v1beta/models/...`。
 - 对于 chat-completions 风格的后端，使用 `/api/provider/{provider}/v1/chat/completions`。
+- 对于 OpenAI 风格的图片生成/编辑后端，使用 `/api/provider/{provider}/v1/images/generations` 和 `/api/provider/{provider}/v1/images/edits`。
 
 这些路径有助于选择协议表面，但当多个后端复用同一个客户端可见模型名时，它们本身并不能保证唯一的推理执行器。实际的推理路由仍然根据请求里的 model/alias 解析。若要严格钉住某个后端，请使用唯一 alias、前缀，或避免让多个后端暴露相同的客户端模型名。
 

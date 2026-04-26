@@ -59,7 +59,7 @@ Get 10% OFF GLM CODING PLAN：https://z.ai/subscribe?ic=8JVLJQFSKB
 - Amp CLI and IDE extensions support with provider routing
 - Streaming and non-streaming responses
 - Function calling/tools support
-- Multimodal input support (text and images)
+- Multimodal input support (text and images) plus OpenAI-compatible image generation/editing endpoints (`/v1/images/generations`, `/v1/images/edits`)
 - Multiple accounts with round-robin load balancing (Gemini, OpenAI, Claude)
 - Simple CLI authentication flows (Gemini, OpenAI, Claude)
 - Generative Language API Key support
@@ -96,6 +96,7 @@ When you need the request/response shape of a specific backend family, use the p
 - Use `/api/provider/{provider}/v1/messages` for messages-style backends.
 - Use `/api/provider/{provider}/v1beta/models/...` for model-scoped generate endpoints.
 - Use `/api/provider/{provider}/v1/chat/completions` for chat-completions backends.
+- Use `/api/provider/{provider}/v1/images/generations` and `/api/provider/{provider}/v1/images/edits` for OpenAI-style image generation and editing backends.
 
 These routes help you select the protocol surface, but they do not by themselves guarantee a unique inference executor when the same client-visible model name is reused across multiple backends. Inference routing is still resolved from the request model/alias. For strict backend pinning, use unique aliases, prefixes, or otherwise avoid overlapping client-visible model names.
 
