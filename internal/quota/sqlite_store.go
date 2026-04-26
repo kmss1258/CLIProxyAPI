@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	_ "modernc.org/sqlite"
 )
+
+const usageSnapshotScopeRequestStatistics = "request_statistics"
 
 type SQLiteStore struct {
 	db            *sql.DB
@@ -78,6 +81,11 @@ func (s *SQLiteStore) init() error {
 			websocket_timeline BLOB,
 			truncation_flags TEXT,
 			api_errors TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS usage_snapshots (
+			scope TEXT PRIMARY KEY,
+			snapshot_json TEXT NOT NULL,
+			updated_at TEXT NOT NULL
 		);`,
 		`ALTER TABLE request_logs ADD COLUMN provider TEXT;`,
 		`ALTER TABLE request_logs ADD COLUMN model TEXT;`,
@@ -153,6 +161,64 @@ func (s *SQLiteStore) ResetUsage(apiKey string) error {
 	}
 	_, err := s.db.Exec(`DELETE FROM client_key_usage WHERE api_key = ?`, apiKey)
 	return err
+}
+
+func (s *SQLiteStore) StoreUsageSnapshot(snapshot usage.StatisticsSnapshot) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO usage_snapshots(scope, snapshot_json, updated_at)
+		VALUES(?, ?, ?)
+		ON CONFLICT(scope) DO UPDATE SET
+			snapshot_json = excluded.snapshot_json,
+			updated_at = excluded.updated_at
+	`, usageSnapshotScopeRequestStatistics, string(payload), time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *SQLiteStore) LoadUsageSnapshot() (usage.StatisticsSnapshot, bool, error) {
+	result := usage.StatisticsSnapshot{
+		APIs:           map[string]usage.APISnapshot{},
+		RequestsByDay:  map[string]int64{},
+		RequestsByHour: map[string]int64{},
+		TokensByDay:    map[string]int64{},
+		TokensByHour:   map[string]int64{},
+	}
+	if s == nil || s.db == nil {
+		return result, false, nil
+	}
+	var payload string
+	err := s.db.QueryRow(`SELECT snapshot_json FROM usage_snapshots WHERE scope = ?`, usageSnapshotScopeRequestStatistics).Scan(&payload)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return result, false, nil
+		}
+		return result, false, err
+	}
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		return usage.StatisticsSnapshot{}, false, err
+	}
+	if result.APIs == nil {
+		result.APIs = map[string]usage.APISnapshot{}
+	}
+	if result.RequestsByDay == nil {
+		result.RequestsByDay = map[string]int64{}
+	}
+	if result.RequestsByHour == nil {
+		result.RequestsByHour = map[string]int64{}
+	}
+	if result.TokensByDay == nil {
+		result.TokensByDay = map[string]int64{}
+	}
+	if result.TokensByHour == nil {
+		result.TokensByHour = map[string]int64{}
+	}
+	return result, true, nil
 }
 
 func (s *SQLiteStore) InsertRequestLog(entry RequestLogEntry) error {

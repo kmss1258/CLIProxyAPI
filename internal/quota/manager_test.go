@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
 func TestManagerAllowApplyAndReset(t *testing.T) {
@@ -127,5 +128,71 @@ func TestManagerResetHoursResetsAnchoredWindowAfterBoundary(t *testing.T) {
 	allowed, status = manager168.Allow("weekly-parity-key")
 	if !allowed || status.Remaining != 10 || status.UsedOutputTokens != 0 {
 		t.Fatalf("expected 168-hour policy to match weekly behavior after boundary, got allowed=%v status=%+v", allowed, status)
+	}
+}
+
+func TestManagerRestoreUsageStatisticsFromSnapshot(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	manager := NewManager()
+	cfg := &config.Config{}
+	cfg.SQLitePromptLog.Path = filepath.Join(tmpDir, "quota.sqlite")
+	if err := manager.UpdateConfig(cfg, configPath); err != nil {
+		t.Fatalf("UpdateConfig() error = %v", err)
+	}
+
+	timestamp := time.Date(2026, 4, 23, 15, 0, 0, 0, time.UTC)
+	persisted := usage.StatisticsSnapshot{
+		APIs: map[string]usage.APISnapshot{
+			"k1": {
+				Models: map[string]usage.ModelSnapshot{
+					"gpt-5.4-mini": {
+						Details: []usage.RequestDetail{{
+							Timestamp: timestamp,
+							Source:    "openai",
+							Tokens: usage.TokenStats{
+								InputTokens:  2,
+								OutputTokens: 3,
+								TotalTokens:  5,
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+	if err := manager.store.StoreUsageSnapshot(persisted); err != nil {
+		t.Fatalf("StoreUsageSnapshot() error = %v", err)
+	}
+
+	stats := usage.NewRequestStatistics()
+	result, restored, err := manager.RestoreUsageStatistics(stats)
+	if err != nil {
+		t.Fatalf("RestoreUsageStatistics() error = %v", err)
+	}
+	if !restored {
+		t.Fatal("expected usage statistics snapshot to be restored")
+	}
+	if result.Added != 1 || result.Skipped != 0 {
+		t.Fatalf("unexpected first restore result: %+v", result)
+	}
+	snapshot := stats.Snapshot()
+	if snapshot.TotalRequests != 1 || snapshot.TotalTokens != 5 {
+		t.Fatalf("unexpected restored snapshot: %#v", snapshot)
+	}
+
+	result, restored, err = manager.RestoreUsageStatistics(stats)
+	if err != nil {
+		t.Fatalf("second RestoreUsageStatistics() error = %v", err)
+	}
+	if !restored {
+		t.Fatal("expected usage statistics snapshot to remain restorable")
+	}
+	if result.Added != 0 || result.Skipped != 1 {
+		t.Fatalf("unexpected second restore result: %+v", result)
+	}
+	snapshot = stats.Snapshot()
+	if snapshot.TotalRequests != 1 || snapshot.TotalTokens != 5 {
+		t.Fatalf("expected no double-counting after second restore, got %#v", snapshot)
 	}
 }

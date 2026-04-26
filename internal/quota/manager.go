@@ -278,6 +278,43 @@ func (m *Manager) LoadRequestLogUsageSnapshot(apiKeys []string) (usage.Statistic
 	return store.LoadRequestLogUsageSnapshot(apiKeys)
 }
 
+func (m *Manager) StoreUsageSnapshot(stats *usage.RequestStatistics) error {
+	if m == nil || stats == nil {
+		return nil
+	}
+	m.mu.RLock()
+	store := m.store
+	m.mu.RUnlock()
+	if store == nil {
+		return nil
+	}
+	return store.StoreUsageSnapshot(stats.Snapshot())
+}
+
+func (m *Manager) LoadUsageSnapshot() (usage.StatisticsSnapshot, bool, error) {
+	if m == nil {
+		return usage.StatisticsSnapshot{}, false, nil
+	}
+	m.mu.RLock()
+	store := m.store
+	m.mu.RUnlock()
+	if store == nil {
+		return usage.StatisticsSnapshot{}, false, nil
+	}
+	return store.LoadUsageSnapshot()
+}
+
+func (m *Manager) RestoreUsageStatistics(stats *usage.RequestStatistics) (usage.MergeResult, bool, error) {
+	if m == nil || stats == nil {
+		return usage.MergeResult{}, false, nil
+	}
+	snapshot, ok, err := m.LoadUsageSnapshot()
+	if err != nil || !ok {
+		return usage.MergeResult{}, ok, err
+	}
+	return stats.MergeSnapshot(snapshot), true, nil
+}
+
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil
