@@ -139,3 +139,87 @@ func TestGetUsageStatisticsHydratesMemoryFromSQLiteFallback(t *testing.T) {
 		t.Fatalf("expected hydrated + live total tokens 10, got %#v", payload.Usage.APIs)
 	}
 }
+
+func TestGetUsageStatisticsPrefersPersistedUsageSnapshotOverRequestLogs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	dbPath := filepath.Join(tmpDir, "prompt_logs.sqlite")
+	cfg := &config.Config{SDKConfig: config.SDKConfig{APIKeys: []string{"k1"}}}
+	cfg.SQLitePromptLog.Path = dbPath
+	manager := quota.NewManager()
+	if err := manager.UpdateConfig(cfg, configPath); err != nil {
+		t.Fatalf("UpdateConfig() error = %v", err)
+	}
+	stats := usage.NewRequestStatistics()
+	persisted := usage.StatisticsSnapshot{
+		APIs: map[string]usage.APISnapshot{
+			"k1": {
+				Models: map[string]usage.ModelSnapshot{
+					"gpt-5.4-mini": {
+						Details: []usage.RequestDetail{{
+							Timestamp: time.Date(2026, 4, 23, 10, 0, 0, 0, time.UTC),
+							Source:    "openai",
+							Tokens:    usage.TokenStats{InputTokens: 2, OutputTokens: 3, TotalTokens: 5},
+						}},
+					},
+				},
+			},
+		},
+	}
+	if err := manager.StoreUsageSnapshot(statsFromSnapshot(t, persisted)); err != nil {
+		t.Fatalf("StoreUsageSnapshot() error = %v", err)
+	}
+	store, err := quota.OpenSQLiteStore(dbPath, 0)
+	if err != nil {
+		t.Fatalf("OpenSQLiteStore() error = %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.InsertRequestLog(quota.RequestLogEntry{
+		RequestID:        "req-persisted-priority-1",
+		URL:              "/v1/chat/completions",
+		Method:           http.MethodPost,
+		APIKeyHash:       quota.RequestLogAPIKeyIdentifiers("k1")[1],
+		Provider:         "openai",
+		Model:            "gpt-5.4-mini",
+		StatusCode:       http.StatusOK,
+		InputTokens:      7,
+		OutputTokens:     9,
+		ReasoningTokens:  1,
+		RequestTimestamp: time.Date(2026, 4, 23, 11, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("InsertRequestLog() error = %v", err)
+	}
+	h := NewHandlerWithoutConfigFilePath(cfg, nil)
+	h.SetUsageStatistics(stats)
+	h.SetQuotaManager(manager)
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v0/management/usage", nil)
+	h.GetUsageStatistics(c)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Usage usage.StatisticsSnapshot `json:"usage"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v body=%s", err, rr.Body.String())
+	}
+	if got := payload.Usage.APIs["k1"].TotalTokens; got != 5 {
+		t.Fatalf("expected persisted usage snapshot to win over request log fallback, got %#v", payload.Usage.APIs)
+	}
+	if got := stats.Snapshot().APIs["k1"].TotalTokens; got != 5 {
+		t.Fatalf("expected in-memory stats to hydrate from persisted snapshot only, got %#v", stats.Snapshot().APIs)
+	}
+}
+
+func statsFromSnapshot(t *testing.T, snapshot usage.StatisticsSnapshot) *usage.RequestStatistics {
+	t.Helper()
+	stats := usage.NewRequestStatistics()
+	result := stats.MergeSnapshot(snapshot)
+	if result.Added == 0 && len(snapshot.APIs) > 0 {
+		t.Fatalf("expected snapshot merge to add records, got %+v", result)
+	}
+	return stats
+}

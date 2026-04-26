@@ -214,6 +214,14 @@ func (h *Handler) sqliteUsageSnapshotOr(snapshot usage.StatisticsSnapshot) usage
 	if h == nil || h.quotaManager == nil || h.cfg == nil {
 		return snapshot
 	}
+	persisted, ok, err := h.quotaManager.LoadUsageSnapshot()
+	if err == nil && ok && len(persisted.APIs) > 0 {
+		if h.usageStats != nil {
+			h.usageStats.MergeSnapshot(persisted)
+			return h.usageStats.Snapshot()
+		}
+		return persisted
+	}
 	fallback, err := h.quotaManager.LoadRequestLogUsageSnapshot(h.cfg.APIKeys)
 	if err != nil || len(fallback.APIs) == 0 {
 		return snapshot
