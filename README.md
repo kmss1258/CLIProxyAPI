@@ -1,6 +1,6 @@
 # CLI Proxy API
 
-English | [中文](README_CN.md) | [日本語](README_JA.md)
+English | [한국어](README_KO.md) | [中文](README_CN.md) | [日本語](README_JA.md)
 
 > **Current branch note**
 >

@@ -1,6 +1,6 @@
 # CLI Proxy API
 
-[English](README.md) | [中文](README_CN.md) | 日本語
+[English](README.md) | [한국어](README_KO.md) | [中文](README_CN.md) | 日本語
 
 CLI向けのOpenAI/Gemini/Claude/Codex互換APIインターフェースを提供するプロキシサーバーです。
 

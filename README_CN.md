@@ -1,6 +1,6 @@
 # CLI 代理 API
 
-[English](README.md) | 中文 | [日本語](README_JA.md)
+[English](README.md) | [한국어](README_KO.md) | 中文 | [日本語](README_JA.md)
 
 一个为 CLI 提供 OpenAI/Gemini/Claude/Codex 兼容 API 接口的代理服务器。
 
