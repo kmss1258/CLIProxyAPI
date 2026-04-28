@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
@@ -556,6 +557,9 @@ type OpenAICompatibilityAPIKey struct {
 
 	// Concurrency caps concurrent in-flight requests for this credential. 0 means unlimited.
 	Concurrency int `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+
+	// SpendLimitUSD optionally records an operator-defined OpenRouter spend limit in USD.
+	SpendLimitUSD string `yaml:"spend-limit-usd,omitempty" json:"spend-limit-usd,omitempty"`
 }
 
 // OpenAICompatibilityModel represents a model configuration for OpenAI compatibility,
@@ -570,6 +574,9 @@ type OpenAICompatibilityModel struct {
 	// Thinking configures the thinking/reasoning capability for this model.
 	// If nil, the model defaults to level-based reasoning with levels ["low", "medium", "high"].
 	Thinking *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
+
+	// Provider optionally configures provider routing preferences for this model.
+	Provider map[string]any `yaml:"provider,omitempty" json:"provider,omitempty"`
 }
 
 func (m OpenAICompatibilityModel) GetName() string  { return m.Name }
@@ -876,6 +883,25 @@ func (cfg *Config) SanitizeOpenAICompatibility() {
 		e.Prefix = normalizeModelPrefix(e.Prefix)
 		e.BaseURL = strings.TrimSpace(e.BaseURL)
 		e.Headers = NormalizeHeaders(e.Headers)
+		for j := range e.APIKeyEntries {
+			e.APIKeyEntries[j].APIKey = strings.TrimSpace(e.APIKeyEntries[j].APIKey)
+			e.APIKeyEntries[j].ProxyURL = strings.TrimSpace(e.APIKeyEntries[j].ProxyURL)
+			e.APIKeyEntries[j].SpendLimitUSD = openrouter.NormalizeUSDString(e.APIKeyEntries[j].SpendLimitUSD)
+		}
+		cleanModels := make([]OpenAICompatibilityModel, 0, len(e.Models))
+		for j := range e.Models {
+			model := e.Models[j]
+			model.Name = strings.TrimSpace(model.Name)
+			model.Alias = strings.TrimSpace(model.Alias)
+			if model.Name == "" && model.Alias == "" {
+				continue
+			}
+			if len(model.Provider) == 0 {
+				model.Provider = nil
+			}
+			cleanModels = append(cleanModels, model)
+		}
+		e.Models = cleanModels
 		if e.BaseURL == "" {
 			// Skip providers with no base-url; treated as removed
 			continue
