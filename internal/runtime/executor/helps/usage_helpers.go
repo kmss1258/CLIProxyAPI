@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	"github.com/tidwall/gjson"
@@ -232,6 +233,11 @@ func ParseOpenAIUsage(data []byte) usage.Detail {
 	if reasoning.Exists() {
 		detail.ReasoningTokens = reasoning.Int()
 	}
+	if cost := usageNode.Get("cost"); cost.Exists() {
+		if micros, ok := openrouter.ParseUSDMicrosAny(cost.Value()); ok && micros > 0 {
+			detail.SpendMicros = micros
+		}
+	}
 	return detail
 }
 
@@ -254,6 +260,11 @@ func ParseOpenAIStreamUsage(line []byte) (usage.Detail, bool) {
 	}
 	if reasoning := usageNode.Get("completion_tokens_details.reasoning_tokens"); reasoning.Exists() {
 		detail.ReasoningTokens = reasoning.Int()
+	}
+	if cost := usageNode.Get("cost"); cost.Exists() {
+		if micros, ok := openrouter.ParseUSDMicrosAny(cost.Value()); ok && micros > 0 {
+			detail.SpendMicros = micros
+		}
 	}
 	return detail, true
 }

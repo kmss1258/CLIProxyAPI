@@ -68,6 +68,7 @@ func (s *SQLiteStore) init() error {
 			input_tokens INTEGER NOT NULL DEFAULT 0,
 			output_tokens INTEGER NOT NULL DEFAULT 0,
 			reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+			spend_micros INTEGER NOT NULL DEFAULT 0,
 			request_timestamp TEXT,
 			api_response_timestamp TEXT,
 			created_at TEXT NOT NULL,
@@ -93,6 +94,7 @@ func (s *SQLiteStore) init() error {
 		`ALTER TABLE request_logs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;`,
 		`ALTER TABLE request_logs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;`,
 		`ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE request_logs ADD COLUMN spend_micros INTEGER NOT NULL DEFAULT 0;`,
 		`ALTER TABLE request_logs ADD COLUMN truncation_flags TEXT;`,
 	}
 	for _, stmt := range stmts {
@@ -233,12 +235,12 @@ func (s *SQLiteStore) InsertRequestLog(entry RequestLogEntry) error {
 	_, err := s.db.Exec(`
 		INSERT INTO request_logs(
 			request_id, url, method, api_key_hash, provider, model, status_code, is_stream, latency_ms,
-			input_tokens, output_tokens, reasoning_tokens,
+			input_tokens, output_tokens, reasoning_tokens, spend_micros,
 			request_timestamp, api_response_timestamp, created_at,
 			request_headers, response_headers,
 			request_body, response_body, api_request_body, api_response_body,
 			api_websocket_timeline, websocket_timeline, truncation_flags, api_errors
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		entry.RequestID,
 		entry.URL,
@@ -252,6 +254,7 @@ func (s *SQLiteStore) InsertRequestLog(entry RequestLogEntry) error {
 		entry.InputTokens,
 		entry.OutputTokens,
 		entry.ReasoningTokens,
+		entry.SpendMicros,
 		formatNullableTime(entry.RequestTimestamp),
 		formatNullableTime(entry.APIResponseTimestamp),
 		time.Now().UTC().Format(time.RFC3339Nano),
@@ -312,7 +315,7 @@ func (s *SQLiteStore) LoadRequestLogUsageSnapshot(apiKeys []string) (usage.Stati
 	if len(args) == 0 {
 		return result, nil
 	}
-	query := `SELECT api_key_hash, provider, model, status_code, latency_ms, input_tokens, output_tokens, reasoning_tokens, request_timestamp, api_response_timestamp, created_at FROM request_logs WHERE api_key_hash IN (` + strings.Join(placeholders, ",") + `) ORDER BY id ASC`
+	query := `SELECT api_key_hash, provider, model, status_code, latency_ms, input_tokens, output_tokens, reasoning_tokens, spend_micros, request_timestamp, api_response_timestamp, created_at FROM request_logs WHERE api_key_hash IN (` + strings.Join(placeholders, ",") + `) ORDER BY id ASC`
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return result, err
@@ -321,9 +324,9 @@ func (s *SQLiteStore) LoadRequestLogUsageSnapshot(apiKeys []string) (usage.Stati
 	for rows.Next() {
 		var apiKeyHash, provider, model string
 		var statusCode int
-		var latencyMS, inputTokens, outputTokens, reasoningTokens int64
+		var latencyMS, inputTokens, outputTokens, reasoningTokens, spendMicros int64
 		var requestTimestamp, apiResponseTimestamp, createdAt sql.NullString
-		if err := rows.Scan(&apiKeyHash, &provider, &model, &statusCode, &latencyMS, &inputTokens, &outputTokens, &reasoningTokens, &requestTimestamp, &apiResponseTimestamp, &createdAt); err != nil {
+		if err := rows.Scan(&apiKeyHash, &provider, &model, &statusCode, &latencyMS, &inputTokens, &outputTokens, &reasoningTokens, &spendMicros, &requestTimestamp, &apiResponseTimestamp, &createdAt); err != nil {
 			return result, err
 		}
 		apiKey := identifierToAPIKey[apiKeyHash]
@@ -344,6 +347,7 @@ func (s *SQLiteStore) LoadRequestLogUsageSnapshot(apiKeys []string) (usage.Stati
 			result.SuccessCount++
 		}
 		result.TotalTokens += tokens.TotalTokens
+		result.TotalSpendMicros += spendMicros
 		dayKey := timestamp.Format("2006-01-02")
 		hourKey := formatSnapshotHour(timestamp.Hour())
 		result.RequestsByDay[dayKey]++
@@ -356,6 +360,7 @@ func (s *SQLiteStore) LoadRequestLogUsageSnapshot(apiKeys []string) (usage.Stati
 		}
 		apiSnapshot.TotalRequests++
 		apiSnapshot.TotalTokens += tokens.TotalTokens
+		apiSnapshot.TotalSpendMicros += spendMicros
 		modelName := strings.TrimSpace(model)
 		if modelName == "" {
 			modelName = "unknown"
@@ -363,12 +368,14 @@ func (s *SQLiteStore) LoadRequestLogUsageSnapshot(apiKeys []string) (usage.Stati
 		modelSnapshot := apiSnapshot.Models[modelName]
 		modelSnapshot.TotalRequests++
 		modelSnapshot.TotalTokens += tokens.TotalTokens
+		modelSnapshot.TotalSpendMicros += spendMicros
 		modelSnapshot.Details = append(modelSnapshot.Details, usage.RequestDetail{
-			Timestamp: timestamp,
-			LatencyMs: latencyMS,
-			Source:    strings.TrimSpace(provider),
-			Tokens:    tokens,
-			Failed:    statusCode >= 400,
+			Timestamp:   timestamp,
+			LatencyMs:   latencyMS,
+			Source:      strings.TrimSpace(provider),
+			Tokens:      tokens,
+			SpendMicros: spendMicros,
+			Failed:      statusCode >= 400,
 		})
 		apiSnapshot.Models[modelName] = modelSnapshot
 		result.APIs[apiKey] = apiSnapshot
@@ -445,6 +452,7 @@ type RequestLogEntry struct {
 	InputTokens          int64
 	OutputTokens         int64
 	ReasoningTokens      int64
+	SpendMicros          int64
 	RequestTimestamp     time.Time
 	APIResponseTimestamp time.Time
 	RequestHeadersJSON   string

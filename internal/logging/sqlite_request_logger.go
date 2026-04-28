@@ -12,6 +12,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -126,6 +127,7 @@ func (l *SQLiteRequestLogger) buildEntry(isStream bool, url, method string, requ
 		InputTokens:          metadata.InputTokens,
 		OutputTokens:         metadata.OutputTokens,
 		ReasoningTokens:      metadata.ReasoningTokens,
+		SpendMicros:          metadata.SpendMicros,
 		RequestTimestamp:     requestTimestamp,
 		APIResponseTimestamp: apiResponseTimestamp,
 		RequestHeadersJSON:   requestHeadersJSON,
@@ -257,6 +259,7 @@ type derivedMetadata struct {
 	InputTokens     int64
 	OutputTokens    int64
 	ReasoningTokens int64
+	SpendMicros     int64
 	TruncationFlags string
 }
 
@@ -284,6 +287,10 @@ func deriveLogMetadata(url, method string, requestTimestamp, responseTimestamp t
 		jsonInt(responseBody, "usage.output_tokens_details.reasoning_tokens"),
 		jsonInt(responseBody, "usage.reasoning_tokens"),
 	)
+	spendMicros := firstPositive(
+		jsonCostMicros(apiResponse, "usage.cost"),
+		jsonCostMicros(responseBody, "usage.cost"),
+	)
 	latency := int64(0)
 	if !requestTimestamp.IsZero() && !responseTimestamp.IsZero() && responseTimestamp.After(requestTimestamp) {
 		latency = responseTimestamp.Sub(requestTimestamp).Milliseconds()
@@ -295,7 +302,23 @@ func deriveLogMetadata(url, method string, requestTimestamp, responseTimestamp t
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		ReasoningTokens: reasoningTokens,
+		SpendMicros:     spendMicros,
 	}
+}
+
+func jsonCostMicros(data []byte, path string) int64 {
+	if len(data) == 0 || path == "" || !gjson.ValidBytes(data) {
+		return 0
+	}
+	value := gjson.GetBytes(data, path)
+	if !value.Exists() {
+		return 0
+	}
+	micros, ok := openrouter.ParseUSDMicrosAny(value.Value())
+	if !ok || micros < 0 {
+		return 0
+	}
+	return micros
 }
 
 func inferProviderFromURL(url string) string {

@@ -29,6 +29,7 @@ type Detail struct {
 	ReasoningTokens int64
 	CachedTokens    int64
 	TotalTokens     int64
+	SpendMicros     int64
 }
 
 // Plugin consumes usage records emitted by the proxy runtime.
