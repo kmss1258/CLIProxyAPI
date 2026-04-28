@@ -29,8 +29,10 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kimi"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/synthesizer"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -462,6 +464,14 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 			}
 		}
 	}
+	if limit := openRouterSpendLimitForAuth(auth); limit != "" {
+		entry["spend_limit_usd"] = limit
+	}
+	if openrouter.IsProviderName(auth.Provider) {
+		if baseURL := strings.TrimSpace(authAttribute(auth, "base_url")); baseURL != "" {
+			entry["base_url"] = baseURL
+		}
+	}
 	return entry
 }
 
@@ -795,15 +805,17 @@ func (h *Handler) writeAuthFile(ctx context.Context, name string, data []byte) e
 			dst = abs
 		}
 	}
-	auth, err := h.buildAuthFromFileData(dst, data)
+	auths, err := h.buildAuthRecordsFromFileData(dst, data)
 	if err != nil {
 		return err
 	}
 	if errWrite := os.WriteFile(dst, data, 0o600); errWrite != nil {
 		return fmt.Errorf("failed to write file: %w", errWrite)
 	}
-	if err := h.upsertAuthRecord(ctx, auth); err != nil {
-		return err
+	for _, auth := range auths {
+		if err := h.upsertAuthRecord(ctx, auth); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -971,14 +983,19 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 	if h.authManager == nil {
 		return nil
 	}
-	auth, err := h.buildAuthFromFileData(path, data)
+	auths, err := h.buildAuthRecordsFromFileData(path, data)
 	if err != nil {
 		return err
 	}
-	return h.upsertAuthRecord(ctx, auth)
+	for _, auth := range auths {
+		if err := h.upsertAuthRecord(ctx, auth); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (h *Handler) buildAuthFromFileData(path string, data []byte) (*coreauth.Auth, error) {
+func (h *Handler) buildAuthRecordsFromFileData(path string, data []byte) ([]*coreauth.Auth, error) {
 	if path == "" {
 		return nil, fmt.Errorf("auth path is empty")
 	}
@@ -989,54 +1006,61 @@ func (h *Handler) buildAuthFromFileData(path string, data []byte) (*coreauth.Aut
 			return nil, fmt.Errorf("failed to read auth file: %w", err)
 		}
 	}
-	metadata := make(map[string]any)
-	if err := json.Unmarshal(data, &metadata); err != nil {
-		return nil, fmt.Errorf("invalid auth file: %w", err)
+	resolvedAuthDir := ""
+	if h != nil && h.cfg != nil {
+		resolvedAuthDir = strings.TrimSpace(h.cfg.AuthDir)
 	}
-	provider, _ := metadata["type"].(string)
-	if provider == "" {
-		provider = "unknown"
+	ctx := &synthesizer.SynthesisContext{
+		Config:      h.cfg,
+		AuthDir:     resolvedAuthDir,
+		Now:         time.Now(),
+		IDGenerator: synthesizer.NewStableIDGenerator(),
 	}
-	label := provider
-	if email, ok := metadata["email"].(string); ok && email != "" {
-		label = email
+	auths := synthesizer.SynthesizeAuthFile(ctx, path, data)
+	if len(auths) == 0 {
+		return nil, fmt.Errorf("invalid auth file: no auth records generated")
 	}
-	lastRefresh, hasLastRefresh := extractLastRefreshTimestamp(metadata)
-
-	authID := h.authIDForPath(path)
-	if authID == "" {
-		authID = path
-	}
-	attr := map[string]string{
-		"path":   path,
-		"source": path,
-	}
-	auth := &coreauth.Auth{
-		ID:         authID,
-		Provider:   provider,
-		FileName:   filepath.Base(path),
-		Label:      label,
-		Status:     coreauth.StatusActive,
-		Attributes: attr,
-		Metadata:   metadata,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-	if hasLastRefresh {
-		auth.LastRefreshedAt = lastRefresh
-	}
-	if h != nil && h.authManager != nil {
-		if existing, ok := h.authManager.GetByID(authID); ok {
-			auth.CreatedAt = existing.CreatedAt
-			if !hasLastRefresh {
-				auth.LastRefreshedAt = existing.LastRefreshedAt
+	for _, auth := range auths {
+		if auth == nil {
+			continue
+		}
+		auth.FileName = filepath.Base(path)
+		if auth.Attributes == nil {
+			auth.Attributes = map[string]string{}
+		}
+		auth.Attributes["path"] = path
+		auth.Attributes["source"] = path
+		if h != nil && h.authManager != nil {
+			if existing, ok := h.authManager.GetByID(auth.ID); ok {
+				auth.CreatedAt = existing.CreatedAt
+				if auth.LastRefreshedAt.IsZero() {
+					auth.LastRefreshedAt = existing.LastRefreshedAt
+				}
+				auth.NextRefreshAfter = existing.NextRefreshAfter
+				auth.Runtime = existing.Runtime
 			}
-			auth.NextRefreshAfter = existing.NextRefreshAfter
-			auth.Runtime = existing.Runtime
 		}
 	}
-	coreauth.ApplyCustomHeadersFromMetadata(auth)
-	return auth, nil
+	return auths, nil
+}
+
+func openRouterSpendLimitForAuth(auth *coreauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if auth.Attributes != nil {
+		if raw := strings.TrimSpace(auth.Attributes["openrouter_spend_limit_micros"]); raw != "" {
+			if micros, err := strconv.ParseInt(raw, 10, 64); err == nil {
+				return openrouter.FormatUSDMicros(micros)
+			}
+		}
+	}
+	if auth.Metadata != nil {
+		if micros, ok := openrouter.ParseUSDMicrosAny(auth.Metadata["spend_limit_usd"]); ok {
+			return openrouter.FormatUSDMicros(micros)
+		}
+	}
+	return ""
 }
 
 func (h *Handler) upsertAuthRecord(ctx context.Context, auth *coreauth.Auth) error {
@@ -1126,12 +1150,13 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 	}
 
 	var req struct {
-		Name     string            `json:"name"`
-		Prefix   *string           `json:"prefix"`
-		ProxyURL *string           `json:"proxy_url"`
-		Headers  map[string]string `json:"headers"`
-		Priority *int              `json:"priority"`
-		Note     *string           `json:"note"`
+		Name          string            `json:"name"`
+		Prefix        *string           `json:"prefix"`
+		ProxyURL      *string           `json:"proxy_url"`
+		SpendLimitUSD *string           `json:"spend_limit_usd"`
+		Headers       map[string]string `json:"headers"`
+		Priority      *int              `json:"priority"`
+		Note          *string           `json:"note"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -1189,6 +1214,23 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 			delete(targetAuth.Metadata, "proxy_url")
 		} else {
 			targetAuth.Metadata["proxy_url"] = proxyURL
+		}
+		changed = true
+	}
+	if req.SpendLimitUSD != nil {
+		if targetAuth.Metadata == nil {
+			targetAuth.Metadata = make(map[string]any)
+		}
+		if targetAuth.Attributes == nil {
+			targetAuth.Attributes = make(map[string]string)
+		}
+		limitValue := openrouter.NormalizeUSDString(*req.SpendLimitUSD)
+		if limitValue == "" {
+			delete(targetAuth.Metadata, "spend_limit_usd")
+			delete(targetAuth.Attributes, "openrouter_spend_limit_micros")
+		} else if micros, ok := openrouter.ParseUSDMicrosString(limitValue); ok {
+			targetAuth.Metadata["spend_limit_usd"] = limitValue
+			targetAuth.Attributes["openrouter_spend_limit_micros"] = strconv.FormatInt(micros, 10)
 		}
 		changed = true
 	}

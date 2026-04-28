@@ -4,15 +4,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -22,9 +25,10 @@ import (
 var newCodexAuth = codex.NewCodexAuth
 
 const (
-	openAIQuotaSuccessTTL   = 2 * time.Minute
-	openAIQuotaErrorTTL     = 30 * time.Second
-	openAIQuotaFetchTimeout = 4 * time.Second
+	openAIQuotaSuccessTTL     = 2 * time.Minute
+	openAIQuotaErrorTTL       = 30 * time.Second
+	openAIQuotaFetchTimeout   = 4 * time.Second
+	openRouterKeyFetchTimeout = 4 * time.Second
 )
 
 type cachedOpenAIQuota struct {
@@ -67,15 +71,16 @@ func (h *Handler) buildQuotaStatusPayload(viewer *quotaViewer) (gin.H, error) {
 			snapshot = h.sqliteUsageSnapshotOr(snapshot)
 		}
 		usageSnapshot = gin.H{
-			"total_requests":   snapshot.TotalRequests,
-			"success_count":    snapshot.SuccessCount,
-			"failure_count":    snapshot.FailureCount,
-			"total_tokens":     snapshot.TotalTokens,
-			"apis":             snapshot.APIs,
-			"requests_by_day":  snapshot.RequestsByDay,
-			"requests_by_hour": snapshot.RequestsByHour,
-			"tokens_by_day":    snapshot.TokensByDay,
-			"tokens_by_hour":   snapshot.TokensByHour,
+			"total_requests":     snapshot.TotalRequests,
+			"success_count":      snapshot.SuccessCount,
+			"failure_count":      snapshot.FailureCount,
+			"total_tokens":       snapshot.TotalTokens,
+			"total_spend_micros": snapshot.TotalSpendMicros,
+			"apis":               snapshot.APIs,
+			"requests_by_day":    snapshot.RequestsByDay,
+			"requests_by_hour":   snapshot.RequestsByHour,
+			"tokens_by_day":      snapshot.TokensByDay,
+			"tokens_by_hour":     snapshot.TokensByHour,
 		}
 	}
 
@@ -88,15 +93,16 @@ func (h *Handler) buildQuotaStatusPayload(viewer *quotaViewer) (gin.H, error) {
 	if viewer != nil && !viewer.CanManage {
 		snapshot = filterUsageSnapshotToAPIKey(snapshot, viewer.APIKey)
 		usageSnapshot = gin.H{
-			"total_requests":   snapshot.TotalRequests,
-			"success_count":    snapshot.SuccessCount,
-			"failure_count":    snapshot.FailureCount,
-			"total_tokens":     snapshot.TotalTokens,
-			"apis":             snapshot.APIs,
-			"requests_by_day":  snapshot.RequestsByDay,
-			"requests_by_hour": snapshot.RequestsByHour,
-			"tokens_by_day":    snapshot.TokensByDay,
-			"tokens_by_hour":   snapshot.TokensByHour,
+			"total_requests":     snapshot.TotalRequests,
+			"success_count":      snapshot.SuccessCount,
+			"failure_count":      snapshot.FailureCount,
+			"total_tokens":       snapshot.TotalTokens,
+			"total_spend_micros": snapshot.TotalSpendMicros,
+			"apis":               snapshot.APIs,
+			"requests_by_day":    snapshot.RequestsByDay,
+			"requests_by_hour":   snapshot.RequestsByHour,
+			"tokens_by_day":      snapshot.TokensByDay,
+			"tokens_by_hour":     snapshot.TokensByHour,
 		}
 		quotaStatuses = filterQuotaStatusesToAPIKey(quotaStatuses, viewer.APIKey)
 		apiKeyAliases = filterAPIKeyAliases(apiKeyAliases, viewer.APIKey)
@@ -122,6 +128,7 @@ func (h *Handler) buildQuotaStatusPayload(viewer *quotaViewer) (gin.H, error) {
 	authUsage := buildAuthUsage(snapshot)
 	enrichAuthFilesWithUsage(authFiles, authUsage)
 	h.enrichAuthFilesWithOpenAIQuota(authFiles)
+	h.enrichAuthFilesWithOpenRouterQuota(authFiles)
 	quotaStatuses = h.enrichQuotaStatusesWithSelectedAuth(quotaStatuses, authFiles)
 
 	return gin.H{
@@ -184,6 +191,7 @@ func filterUsageSnapshotToAPIKey(snapshot usage.StatisticsSnapshot, apiKey strin
 	filtered.APIs[apiKey] = apiSnapshot
 	filtered.TotalRequests = apiSnapshot.TotalRequests
 	filtered.TotalTokens = apiSnapshot.TotalTokens
+	filtered.TotalSpendMicros = apiSnapshot.TotalSpendMicros
 	for _, model := range apiSnapshot.Models {
 		for _, detail := range model.Details {
 			if detail.Failed {
@@ -696,15 +704,18 @@ func buildAuthUsage(snapshot usage.StatisticsSnapshot) []gin.H {
 	oneDayAgo := now.Add(-24 * time.Hour)
 	sevenDaysAgo := now.Add(-7 * 24 * time.Hour)
 	type authAccumulator struct {
-		AuthIndex   string
-		Source      string
-		Requests24h int64
-		Tokens24h   int64
-		Requests7d  int64
-		Tokens7d    int64
-		TotalReqs   int64
-		TotalTokens int64
-		LastSeen    *time.Time
+		AuthIndex        string
+		Source           string
+		Requests24h      int64
+		Tokens24h        int64
+		Spend24hMicros   int64
+		Requests7d       int64
+		Tokens7d         int64
+		Spend7dMicros    int64
+		TotalReqs        int64
+		TotalTokens      int64
+		TotalSpendMicros int64
+		LastSeen         *time.Time
 	}
 	byAuth := make(map[string]*authAccumulator)
 	for _, apiSnapshot := range snapshot.APIs {
@@ -720,6 +731,7 @@ func buildAuthUsage(snapshot usage.StatisticsSnapshot) []gin.H {
 				}
 				acc.TotalReqs++
 				acc.TotalTokens += detail.Tokens.TotalTokens
+				acc.TotalSpendMicros += detail.SpendMicros
 				if !detail.Timestamp.IsZero() {
 					ts := detail.Timestamp
 					if acc.LastSeen == nil || ts.After(*acc.LastSeen) {
@@ -729,10 +741,12 @@ func buildAuthUsage(snapshot usage.StatisticsSnapshot) []gin.H {
 					if !ts.Before(oneDayAgo) {
 						acc.Requests24h++
 						acc.Tokens24h += detail.Tokens.TotalTokens
+						acc.Spend24hMicros += detail.SpendMicros
 					}
 					if !ts.Before(sevenDaysAgo) {
 						acc.Requests7d++
 						acc.Tokens7d += detail.Tokens.TotalTokens
+						acc.Spend7dMicros += detail.SpendMicros
 					}
 				}
 			}
@@ -741,14 +755,17 @@ func buildAuthUsage(snapshot usage.StatisticsSnapshot) []gin.H {
 	rows := make([]gin.H, 0, len(byAuth))
 	for _, acc := range byAuth {
 		row := gin.H{
-			"auth_index":     acc.AuthIndex,
-			"source":         acc.Source,
-			"requests_24h":   acc.Requests24h,
-			"tokens_24h":     acc.Tokens24h,
-			"requests_7d":    acc.Requests7d,
-			"tokens_7d":      acc.Tokens7d,
-			"total_requests": acc.TotalReqs,
-			"total_tokens":   acc.TotalTokens,
+			"auth_index":         acc.AuthIndex,
+			"source":             acc.Source,
+			"requests_24h":       acc.Requests24h,
+			"tokens_24h":         acc.Tokens24h,
+			"spend_24h_micros":   acc.Spend24hMicros,
+			"requests_7d":        acc.Requests7d,
+			"tokens_7d":          acc.Tokens7d,
+			"spend_7d_micros":    acc.Spend7dMicros,
+			"total_requests":     acc.TotalReqs,
+			"total_tokens":       acc.TotalTokens,
+			"total_spend_micros": acc.TotalSpendMicros,
 		}
 		if acc.LastSeen != nil {
 			row["last_seen"] = acc.LastSeen.UTC()
@@ -786,11 +803,128 @@ func enrichAuthFilesWithUsage(authFiles []gin.H, authUsage []gin.H) {
 		if !ok {
 			continue
 		}
-		for _, key := range []string{"requests_24h", "tokens_24h", "requests_7d", "tokens_7d", "total_requests", "total_tokens", "last_seen"} {
+		for _, key := range []string{"requests_24h", "tokens_24h", "spend_24h_micros", "requests_7d", "tokens_7d", "spend_7d_micros", "total_requests", "total_tokens", "total_spend_micros", "last_seen"} {
 			if value, exists := row[key]; exists {
 				entry[key] = value
 			}
 		}
+	}
+}
+
+func (h *Handler) enrichAuthFilesWithOpenRouterQuota(authFiles []gin.H) {
+	if h == nil || h.authManager == nil || len(authFiles) == 0 {
+		return
+	}
+	auths := h.authManager.List()
+	authByIndex := make(map[string]*coreauth.Auth, len(auths))
+	for _, auth := range auths {
+		if auth == nil {
+			continue
+		}
+		index := strings.TrimSpace(auth.EnsureIndex())
+		if index == "" {
+			continue
+		}
+		authByIndex[index] = auth
+	}
+	for _, entry := range authFiles {
+		index, _ := entry["auth_index"].(string)
+		auth := authByIndex[strings.TrimSpace(index)]
+		if auth == nil || !openrouter.IsOpenRouterCompat(auth.Provider, authAttribute(auth, "compat_name"), authAttribute(auth, "provider_key")) {
+			continue
+		}
+		spentMicros := int64FromAny(entry["total_spend_micros"])
+		entry["total_spend_usd"] = openrouter.FormatUSDMicros(spentMicros)
+		if limitMicros, ok := parseOpenRouterSpendLimitMicros(auth); ok {
+			entry["spend_limit_usd"] = openrouter.FormatUSDMicros(limitMicros)
+			entry["remaining_spend_usd"] = openrouter.FormatUSDMicros(limitMicros - spentMicros)
+		}
+		if snapshot := fetchOpenRouterKeyStatus(auth); len(snapshot) > 0 {
+			entry["openrouter_key"] = snapshot
+		}
+	}
+}
+
+func fetchOpenRouterKeyStatus(auth *coreauth.Auth) gin.H {
+	if auth == nil {
+		return nil
+	}
+	apiKey := strings.TrimSpace(authAttribute(auth, "api_key"))
+	if apiKey == "" {
+		return gin.H{"error": "missing api key"}
+	}
+	baseURL := strings.TrimSpace(authAttribute(auth, "base_url"))
+	if baseURL == "" {
+		baseURL = openrouter.DefaultBaseURL
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), openRouterKeyFetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(baseURL, "/")+"/key", nil)
+	if err != nil {
+		return gin.H{"error": err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return gin.H{"error": err.Error()}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = resp.Status
+		}
+		return gin.H{"error": message}
+	}
+	root := gjson.ParseBytes(body)
+	data := root.Get("data")
+	if !data.Exists() {
+		data = root
+	}
+	result := gin.H{}
+	for _, key := range []string{"label", "usage", "usage_daily", "usage_weekly", "usage_monthly", "limit", "limit_remaining", "limit_reset", "is_free_tier", "is_management_key"} {
+		value := data.Get(key)
+		if value.Exists() {
+			result[key] = value.Value()
+		}
+	}
+	return result
+}
+
+func parseOpenRouterSpendLimitMicros(auth *coreauth.Auth) (int64, bool) {
+	if auth == nil {
+		return 0, false
+	}
+	if auth.Attributes != nil {
+		if raw := strings.TrimSpace(auth.Attributes["openrouter_spend_limit_micros"]); raw != "" {
+			if micros, err := strconv.ParseInt(raw, 10, 64); err == nil {
+				return micros, true
+			}
+		}
+	}
+	if auth.Metadata != nil {
+		return openrouter.ParseUSDMicrosAny(auth.Metadata["spend_limit_usd"])
+	}
+	return 0, false
+}
+
+func int64FromAny(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case float32:
+		return int64(typed)
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return parsed
+	default:
+		return 0
 	}
 }
 

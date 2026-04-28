@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 )
 
 // Generic helpers for list[string]
@@ -1082,16 +1083,33 @@ func normalizeOpenAICompatibilityEntry(entry *config.OpenAICompatibility) {
 		return
 	}
 	// Trim base-url; empty base-url indicates provider should be removed by sanitization
+	entry.Name = strings.TrimSpace(entry.Name)
+	entry.Prefix = strings.TrimSpace(entry.Prefix)
 	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	entry.Headers = config.NormalizeHeaders(entry.Headers)
-	existing := make(map[string]struct{}, len(entry.APIKeyEntries))
 	for i := range entry.APIKeyEntries {
 		trimmed := strings.TrimSpace(entry.APIKeyEntries[i].APIKey)
 		entry.APIKeyEntries[i].APIKey = trimmed
-		if trimmed != "" {
-			existing[trimmed] = struct{}{}
-		}
+		entry.APIKeyEntries[i].ProxyURL = strings.TrimSpace(entry.APIKeyEntries[i].ProxyURL)
+		entry.APIKeyEntries[i].SpendLimitUSD = openrouter.NormalizeUSDString(entry.APIKeyEntries[i].SpendLimitUSD)
 	}
+	if len(entry.Models) == 0 {
+		return
+	}
+	normalizedModels := make([]config.OpenAICompatibilityModel, 0, len(entry.Models))
+	for i := range entry.Models {
+		model := entry.Models[i]
+		model.Name = strings.TrimSpace(model.Name)
+		model.Alias = strings.TrimSpace(model.Alias)
+		if model.Name == "" && model.Alias == "" {
+			continue
+		}
+		if len(model.Provider) == 0 {
+			model.Provider = nil
+		}
+		normalizedModels = append(normalizedModels, model)
+	}
+	entry.Models = normalizedModels
 }
 
 func normalizedOpenAICompatibilityEntries(entries []config.OpenAICompatibility) []config.OpenAICompatibility {
