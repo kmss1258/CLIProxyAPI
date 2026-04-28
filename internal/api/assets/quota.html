@@ -449,6 +449,28 @@
 
     .quota-card:hover, .auth-card:hover, .usage-row:hover { border-color: var(--line-strong); box-shadow: var(--shadow-lg); }
     .auth-card.warn { border-color: rgba(239, 68, 68, 0.3); background: linear-gradient(to bottom, rgba(239, 68, 68, 0.05), var(--surface)); }
+    .auth-card.auth-card-premium {
+      border-color: transparent;
+      box-shadow: var(--shadow);
+    }
+    .auth-card.auth-card-premium::before {
+      padding: 1px;
+      background: linear-gradient(135deg,
+        rgba(255, 99, 132, 0.68) 0%,
+        rgba(251, 191, 36, 0.64) 24%,
+        rgba(74, 222, 128, 0.6) 48%,
+        rgba(96, 165, 250, 0.64) 72%,
+        rgba(196, 181, 253, 0.68) 100%);
+    }
+    .auth-card.auth-card-premium:hover {
+      box-shadow: var(--shadow-lg);
+    }
+    .auth-card.auth-card-premium.auth-card-premium-claude-max {
+      --premium-glow: rgba(196, 181, 253, 0.28);
+    }
+    .auth-card.auth-card-premium.auth-card-premium-gpt-pro {
+      --premium-glow: rgba(96, 165, 250, 0.26);
+    }
 
     .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
     .card-title { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -1288,6 +1310,68 @@
           <h2>연동 계정 운영 상태</h2>
           <p class="section-note">연동 계정은 quota 분모가 없어서 퍼센트 대신 상태와 최근 24시간·7일 활동량 중심으로 보여줍니다. API 키 운영과 함께 계정 처리 상태를 점검하는 구간입니다.</p>
         </div>
+        <div class="compact-admin-stack" style="margin-bottom:16px;">
+          <section id="openrouter-create-panel" class="compact-admin-panel" hidden aria-label="OpenRouter 키 추가">
+            <div>
+              <h3>OpenRouter 키 추가</h3>
+              <p class="inline-note" style="margin-top:4px; font-size:0.8rem;">OpenRouter 계정을 새로 등록하는 곳입니다. 키를 저장하고 필요하면 지출 한도도 함께 적어둘 수 있습니다.</p>
+            </div>
+            <div class="compact-admin-row compact-admin-settings">
+              <div class="compact-admin-field path-field">
+                <label for="openrouter-auth-name-input">저장 파일 이름</label>
+                <input id="openrouter-auth-name-input" class="input" type="text" autocomplete="off" spellcheck="false" placeholder="예: openrouter-main.json">
+              </div>
+              <div class="compact-admin-field">
+                <label for="openrouter-auth-key-input">API 키</label>
+                <input id="openrouter-auth-key-input" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="sk-or-v1-...">
+              </div>
+              <div class="compact-admin-field">
+                <label for="openrouter-auth-limit-input">지출 한도(USD, 선택)</label>
+                <input id="openrouter-auth-limit-input" class="input" type="text" autocomplete="off" spellcheck="false" placeholder="예: 1">
+              </div>
+            </div>
+            <div class="compact-admin-row compact-admin-settings">
+              <div class="compact-admin-field">
+                <label for="openrouter-auth-base-url-input">연결 주소</label>
+                <input id="openrouter-auth-base-url-input" class="input" type="text" autocomplete="off" spellcheck="false" placeholder="https://openrouter.ai/api/v1">
+              </div>
+              <div class="compact-admin-field">
+                <label for="openrouter-auth-prefix-input">구분용 접두어 (선택)</label>
+                <input id="openrouter-auth-prefix-input" class="input" type="text" autocomplete="off" spellcheck="false" placeholder="예: team-a">
+              </div>
+              <div class="compact-admin-field">
+                <label for="openrouter-auth-note-input">관리 메모 (선택)</label>
+                <input id="openrouter-auth-note-input" class="input" type="text" autocomplete="off" spellcheck="false" placeholder="예: 월 1달러 한도">
+              </div>
+              <button id="openrouter-auth-create-button" class="button primary" type="button">OpenRouter 키 저장</button>
+            </div>
+          </section>
+          <section id="openrouter-config-panel" class="compact-admin-panel" hidden aria-label="OpenRouter 모델 설정">
+            <div class="compact-admin-section-head">
+              <div>
+                <h3>OpenRouter 모델 연결 설정</h3>
+                <p class="inline-note" style="margin-top:4px; font-size:0.8rem;">기존 <span class="code">openai-compatibility</span> 의 <span class="code">name=openrouter</span> 항목을 수정합니다. 여기서 OpenRouter에 보여줄 모델 목록과, 필요할 때만 모델별 연결 우선순위를 함께 저장합니다.</p>
+              </div>
+              <div class="compact-admin-actions">
+                <button id="openrouter-config-reload-button" class="button ghost" type="button">설정 새로 읽기</button>
+                <button id="openrouter-config-save-button" class="button primary" type="button">OpenRouter 설정 저장</button>
+              </div>
+            </div>
+            <div class="compact-admin-row compact-admin-settings">
+              <div class="compact-admin-field">
+                <label for="openrouter-config-base-url-input">연결 주소</label>
+                <input id="openrouter-config-base-url-input" class="input" type="text" autocomplete="off" spellcheck="false" placeholder="https://openrouter.ai/api/v1">
+              </div>
+              <p class="compact-admin-settings-note">아래 목록은 JSON 형식으로 저장합니다. <span class="code">provider</span> 칸은 꼭 넣지 않아도 되고, 특정 회선을 우선 쓰고 싶을 때만 채우면 됩니다. 예: <span class="code">[{"name":"openai/gpt-5-mini","alias":"gpt-5-mini","provider":{"order":["openai"],"allow_fallbacks":false}}]</span></p>
+            </div>
+            <div class="compact-admin-row compact-admin-settings">
+              <div class="compact-admin-field" style="flex:1 1 100%; min-width:280px;">
+                <label for="openrouter-models-json-input">모델 목록 (JSON)</label>
+                <textarea id="openrouter-models-json-input" class="input" style="min-height:180px; padding:12px; resize:vertical; font-family:var(--mono);"></textarea>
+              </div>
+            </div>
+          </section>
+        </div>
         <div id="auth-section" class="auth-grid"></div>
       </section>
     </div>
@@ -1312,6 +1396,19 @@
       var apiKeyGenerateButton = document.getElementById("api-key-generate-button");
       var apiKeyCreateButton = document.getElementById("api-key-create-button");
       var authPanel = document.getElementById("auth-panel");
+      var openrouterCreatePanel = document.getElementById("openrouter-create-panel");
+      var openrouterAuthNameInput = document.getElementById("openrouter-auth-name-input");
+      var openrouterAuthKeyInput = document.getElementById("openrouter-auth-key-input");
+      var openrouterAuthLimitInput = document.getElementById("openrouter-auth-limit-input");
+      var openrouterAuthBaseURLInput = document.getElementById("openrouter-auth-base-url-input");
+      var openrouterAuthPrefixInput = document.getElementById("openrouter-auth-prefix-input");
+      var openrouterAuthNoteInput = document.getElementById("openrouter-auth-note-input");
+      var openrouterAuthCreateButton = document.getElementById("openrouter-auth-create-button");
+      var openrouterConfigPanel = document.getElementById("openrouter-config-panel");
+      var openrouterConfigBaseURLInput = document.getElementById("openrouter-config-base-url-input");
+      var openrouterModelsJSONInput = document.getElementById("openrouter-models-json-input");
+      var openrouterConfigReloadButton = document.getElementById("openrouter-config-reload-button");
+      var openrouterConfigSaveButton = document.getElementById("openrouter-config-save-button");
       var usagePanelToggle = document.getElementById("usage-panel-toggle");
       var usagePanelBody = document.getElementById("usage-panel-body");
       var concurrencyPanel = document.getElementById("concurrency-panel");
@@ -1352,6 +1449,7 @@
       var concurrencyDraft = createEmptyConcurrencyDraft();
       var currentQuotaRows = [];
       var currentAuthFiles = [];
+      var currentOpenRouterCompat = null;
 
       function el(tag, className, text) {
         var node = document.createElement(tag);
@@ -1476,6 +1574,40 @@
         return status.indexOf("error") >= 0 || message.indexOf("usage_limit_reached") >= 0 || message.indexOf("limit") >= 0 || message.indexOf("quota") >= 0;
       }
 
+      function normaliseAuthSearchValue(value) {
+        return String(value || "").toLowerCase().replace(/[\s_-]+/g, " ").trim();
+      }
+
+      function getPremiumAuthCardType(item) {
+        var provider = normaliseAuthSearchValue(item && (item.provider || item.type));
+        var accountType = normaliseAuthSearchValue(item && item.account_type);
+        var fields = [
+          item && item.provider,
+          item && item.type,
+          item && item.account,
+          item && item.account_type,
+          item && item.label,
+          item && item.name,
+          item && item.status,
+          item && item.status_message,
+          item && item.email,
+          item && item.id,
+          item && item.auth_index
+        ];
+        var text = fields.map(normaliseAuthSearchValue).filter(Boolean).join(" | ");
+        var rawText = fields.map(function (value) { return String(value || "").toLowerCase(); }).filter(Boolean).join(" | ");
+        var isClaudeFamily = provider.indexOf("claude") >= 0 || provider.indexOf("anthropic") >= 0;
+        var isOpenAIFamily = provider.indexOf("openai") >= 0 || provider.indexOf("gpt") >= 0 || provider.indexOf("chatgpt") >= 0 || provider.indexOf("codex") >= 0;
+
+        if (text.indexOf("claude max") >= 0 || text.indexOf("max claude") >= 0) return "claude-max";
+        if (isClaudeFamily && (accountType.indexOf("max") >= 0 || /(^|[^a-z])max(?:\.json)?($|[^a-z])/.test(rawText))) return "claude-max";
+
+        if (text.indexOf("gpt pro") >= 0 || text.indexOf("chatgpt pro") >= 0 || text.indexOf("pro gpt") >= 0) return "gpt-pro";
+        if (isOpenAIFamily && (accountType.indexOf("pro") >= 0 || /(^|[^a-z])pro(?:\.json)?($|[^a-z])/.test(rawText))) return "gpt-pro";
+
+        return "";
+      }
+
       function normaliseQuotas(payload) {
         var quotas = payload && payload.client_api_key_quotas;
         return Array.isArray(quotas) ? quotas.slice() : [];
@@ -1505,6 +1637,8 @@
       function applyViewerMode(viewer) {
         viewerState = viewer || { can_manage: false, scope: "none", api_key: "", alias: "" };
         if (authPanel) authPanel.style.display = viewerState.can_manage ? "block" : "none";
+        if (openrouterCreatePanel) openrouterCreatePanel.hidden = !viewerState.can_manage;
+        if (openrouterConfigPanel) openrouterConfigPanel.hidden = !viewerState.can_manage;
         if (concurrencyPanel) concurrencyPanel.hidden = !viewerState.can_manage;
         if (statAuthsCard) statAuthsCard.style.display = viewerState.can_manage ? "flex" : "none";
         if (managePill) managePill.style.display = viewerState.can_manage ? "inline-flex" : "none";
@@ -1515,6 +1649,8 @@
         applyViewerMode({ can_manage: false, scope: "none", api_key: "", alias: "" });
         if (apiKeyCreatePanel) apiKeyCreatePanel.hidden = true;
         if (authPanel) authPanel.style.display = "none";
+        if (openrouterCreatePanel) openrouterCreatePanel.hidden = true;
+        if (openrouterConfigPanel) openrouterConfigPanel.hidden = true;
         if (statAuthsCard) statAuthsCard.style.display = "none";
         if (managePill) managePill.style.display = "none";
         resetAPIKeyCreateDefaults();
@@ -1554,6 +1690,197 @@
             '',
             'claude'
           ].join("\n");
+        }
+      }
+
+      function defaultOpenRouterAuthFileName() {
+        return "openrouter-" + new Date().toISOString().replace(/[:.]/g, "-") + ".json";
+      }
+
+      function parseOptionalUSD(raw, label) {
+        var value = String(raw || "").trim();
+        if (!value) return "";
+        if (!/^\d+(\.\d+)?$/.test(value)) throw new Error(label + "는 0 이상의 숫자만 입력할 수 있습니다.");
+        return value;
+      }
+
+      function formatMicrosUSD(value) {
+        var micros = num(value);
+        return (micros / 1000000).toFixed(6).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+      }
+
+      function safeJSONStringify(value) {
+        return JSON.stringify(value || [], null, 2);
+      }
+
+      async function loadOpenRouterConfig() {
+        var key = keyInput.value.trim();
+        var response;
+        var text;
+        var data;
+        var entries;
+        if (!key || !viewerState.can_manage) {
+          currentOpenRouterCompat = null;
+          if (openrouterConfigBaseURLInput) openrouterConfigBaseURLInput.value = "https://openrouter.ai/api/v1";
+          if (openrouterModelsJSONInput) openrouterModelsJSONInput.value = "[]";
+          return;
+        }
+        response = await fetch("/v0/management/openai-compatibility", {
+          method: "GET",
+          headers: {
+            "Accept": "application/json",
+            "Authorization": "Bearer " + key,
+            "X-Management-Key": key
+          },
+          cache: "no-store",
+          credentials: "same-origin"
+        });
+        text = await response.text();
+        data = null;
+        try { data = text ? JSON.parse(text) : {}; } catch (e) { data = null; }
+        if (!response.ok) throw new Error(parseErrorMessage(response, text, data));
+        entries = data && Array.isArray(data["openai-compatibility"]) ? data["openai-compatibility"] : [];
+        currentOpenRouterCompat = entries.filter(function (item) { return String(item && item.name || "").trim().toLowerCase() === "openrouter"; })[0] || null;
+        if (openrouterConfigBaseURLInput) openrouterConfigBaseURLInput.value = currentOpenRouterCompat && currentOpenRouterCompat["base-url"] ? currentOpenRouterCompat["base-url"] : "https://openrouter.ai/api/v1";
+        if (openrouterModelsJSONInput) openrouterModelsJSONInput.value = safeJSONStringify(currentOpenRouterCompat && currentOpenRouterCompat.models ? currentOpenRouterCompat.models : []);
+      }
+
+      async function saveOpenRouterConfig() {
+        var key = keyInput.value.trim();
+        var response;
+        var text;
+        var data;
+        var entries;
+        var models;
+        var nextEntry;
+        var replaced;
+        if (!key || !viewerState.can_manage) {
+          setStatus("error", "관리 권한이 있는 키에서만 OpenRouter 설정을 저장할 수 있습니다.");
+          keyInput.focus();
+          return;
+        }
+        try {
+          models = JSON.parse(String(openrouterModelsJSONInput && openrouterModelsJSONInput.value || "[]"));
+          if (!Array.isArray(models)) throw new Error("모델 JSON은 배열이어야 합니다.");
+          response = await fetch("/v0/management/openai-compatibility", {
+            method: "GET",
+            headers: {
+              "Accept": "application/json",
+              "Authorization": "Bearer " + key,
+              "X-Management-Key": key
+            },
+            cache: "no-store",
+            credentials: "same-origin"
+          });
+          text = await response.text();
+          data = null;
+          try { data = text ? JSON.parse(text) : {}; } catch (e) { data = null; }
+          if (!response.ok) throw new Error(parseErrorMessage(response, text, data));
+          entries = data && Array.isArray(data["openai-compatibility"]) ? data["openai-compatibility"].slice() : [];
+          nextEntry = Object.assign({}, currentOpenRouterCompat || {}, {
+            name: "openrouter",
+            "base-url": String(openrouterConfigBaseURLInput && openrouterConfigBaseURLInput.value || "https://openrouter.ai/api/v1").trim() || "https://openrouter.ai/api/v1",
+            models: models
+          });
+          replaced = false;
+          entries = entries.map(function (item) {
+            if (String(item && item.name || "").trim().toLowerCase() === "openrouter") {
+              replaced = true;
+              return nextEntry;
+            }
+            return item;
+          });
+          if (!replaced) entries.push(nextEntry);
+          setActionToast("OpenRouter 설정을 저장하는 중입니다…");
+          openrouterConfigSaveButton.disabled = true;
+          response = await fetch("/v0/management/openai-compatibility", {
+            method: "PUT",
+            headers: {
+              "Accept": "application/json",
+              "Authorization": "Bearer " + key,
+              "X-Management-Key": key,
+              "Content-Type": "application/json"
+            },
+            cache: "no-store",
+            credentials: "same-origin",
+            body: JSON.stringify(entries)
+          });
+          text = await response.text();
+          data = null;
+          try { data = text ? JSON.parse(text) : {}; } catch (e2) { data = null; }
+          if (!response.ok) throw new Error(parseErrorMessage(response, text, data));
+          currentOpenRouterCompat = nextEntry;
+          setActionToast("OpenRouter 설정 저장 완료");
+          await loadOpenRouterConfig();
+        } catch (error) {
+          setActionToast("OpenRouter 설정 저장 실패: " + (error && error.message ? error.message : "unknown error"));
+          setStatus("error", error && error.message ? error.message : "OpenRouter 설정 저장 실패");
+        } finally {
+          openrouterConfigSaveButton.disabled = false;
+        }
+      }
+
+      async function createOpenRouterAuthFile() {
+        var key = keyInput.value.trim();
+        var fileName;
+        var payload;
+        var response;
+        var text;
+        var data;
+        if (!key || !viewerState.can_manage) {
+          setStatus("error", "관리 권한이 있는 키에서만 OpenRouter 키를 추가할 수 있습니다.");
+          keyInput.focus();
+          return;
+        }
+        fileName = String(openrouterAuthNameInput && openrouterAuthNameInput.value || "").trim() || defaultOpenRouterAuthFileName();
+        if (!/\.json$/i.test(fileName)) fileName += ".json";
+        payload = {
+          type: "openrouter",
+          api_key: String(openrouterAuthKeyInput && openrouterAuthKeyInput.value || "").trim(),
+          base_url: String(openrouterAuthBaseURLInput && openrouterAuthBaseURLInput.value || "https://openrouter.ai/api/v1").trim() || "https://openrouter.ai/api/v1"
+        };
+        if (!payload.api_key) {
+          setStatus("error", "OpenRouter API 키를 입력하세요.");
+          if (openrouterAuthKeyInput) openrouterAuthKeyInput.focus();
+          return;
+        }
+        try {
+          if (openrouterAuthPrefixInput && String(openrouterAuthPrefixInput.value || "").trim()) payload.prefix = String(openrouterAuthPrefixInput.value).trim();
+          if (openrouterAuthNoteInput && String(openrouterAuthNoteInput.value || "").trim()) payload.note = String(openrouterAuthNoteInput.value).trim();
+          if (openrouterAuthLimitInput) {
+            var spendLimit = parseOptionalUSD(openrouterAuthLimitInput.value, "지출 한도");
+            if (spendLimit) payload.spend_limit_usd = spendLimit;
+          }
+          setActionToast("OpenRouter 키를 저장하는 중입니다…");
+          openrouterAuthCreateButton.disabled = true;
+          response = await fetch("/v0/management/auth-files?name=" + encodeURIComponent(fileName), {
+            method: "POST",
+            headers: {
+              "Accept": "application/json",
+              "Authorization": "Bearer " + key,
+              "X-Management-Key": key,
+              "Content-Type": "application/json"
+            },
+            cache: "no-store",
+            credentials: "same-origin",
+            body: JSON.stringify(payload)
+          });
+          text = await response.text();
+          data = null;
+          try { data = text ? JSON.parse(text) : {}; } catch (e) { data = null; }
+          if (!response.ok) throw new Error(parseErrorMessage(response, text, data));
+          setActionToast("OpenRouter 키 저장 완료: " + fileName);
+          if (openrouterAuthNameInput) openrouterAuthNameInput.value = defaultOpenRouterAuthFileName();
+          if (openrouterAuthKeyInput) openrouterAuthKeyInput.value = "";
+          if (openrouterAuthLimitInput) openrouterAuthLimitInput.value = "";
+          if (openrouterAuthPrefixInput) openrouterAuthPrefixInput.value = "";
+          if (openrouterAuthNoteInput) openrouterAuthNoteInput.value = "";
+          await loadQuotaStatus(false);
+        } catch (error) {
+          setActionToast("OpenRouter 키 저장 실패: " + (error && error.message ? error.message : "unknown error"));
+          setStatus("error", error && error.message ? error.message : "OpenRouter 키 저장 실패");
+        } finally {
+          openrouterAuthCreateButton.disabled = false;
         }
       }
 
@@ -1827,6 +2154,7 @@
           var requests24h = 0, tokens24h = 0, inputTokens24h = 0, outputTokens24h = 0, reasoningTokens24h = 0, cachedTokens24h = 0;
           var requests7d = 0, tokens7d = 0, inputTokens7d = 0, outputTokens7d = 0, reasoningTokens7d = 0, cachedTokens7d = 0;
           var totalInputTokens = 0, totalOutputTokens = 0, totalReasoningTokens = 0, totalCachedTokens = 0;
+          var spend24hMicros = 0, spend7dMicros = 0, totalSpendMicros = num(snapshot.total_spend_micros);
           var lastSeen = null;
 
           modelNames.forEach(function (modelName) {
@@ -1842,6 +2170,7 @@
               var outputTokens = num(tokenStats.output_tokens);
               var reasoningTokens = num(tokenStats.reasoning_tokens);
               var cachedTokens = num(tokenStats.cached_tokens);
+              var spendMicros = num(detail && detail.spend_micros);
               totalInputTokens += inputTokens;
               totalOutputTokens += outputTokens;
               totalReasoningTokens += reasoningTokens;
@@ -1850,10 +2179,12 @@
               if (age >= 0 && age <= oneDay) {
                 requests24h += 1; tokens24h += totalTokens; inputTokens24h += inputTokens;
                 outputTokens24h += outputTokens; reasoningTokens24h += reasoningTokens; cachedTokens24h += cachedTokens;
+                spend24hMicros += spendMicros;
               }
               if (age >= 0 && age <= sevenDays) {
                 requests7d += 1; tokens7d += totalTokens; inputTokens7d += inputTokens;
                 outputTokens7d += outputTokens; reasoningTokens7d += reasoningTokens; cachedTokens7d += cachedTokens;
+                spend7dMicros += spendMicros;
               }
             });
           });
@@ -1868,10 +2199,13 @@
             totalOutputTokens: totalOutputTokens,
             totalReasoningTokens: totalReasoningTokens,
             totalCachedTokens: totalCachedTokens,
+            totalSpendMicros: totalSpendMicros,
             requests24h: requests24h, tokens24h: tokens24h, inputTokens24h: inputTokens24h,
             outputTokens24h: outputTokens24h, reasoningTokens24h: reasoningTokens24h, cachedTokens24h: cachedTokens24h,
+            spend24hMicros: spend24hMicros,
             requests7d: requests7d, tokens7d: tokens7d, inputTokens7d: inputTokens7d,
             outputTokens7d: outputTokens7d, reasoningTokens7d: reasoningTokens7d, cachedTokens7d: cachedTokens7d,
+            spend7dMicros: spend7dMicros,
             lastSeen: lastSeen,
           });
         });
@@ -2347,6 +2681,13 @@
           outBadge.style.borderColor = "rgba(96,165,250,0.2)";
           outBadge.textContent = "출력 " + formatShort(row.totalOutputTokens);
           tokenBadges.appendChild(outBadge);
+
+          var spendBadge = el("span", "badge");
+          spendBadge.style.color = "#f59e0b";
+          spendBadge.style.background = "rgba(245,158,11,0.12)";
+          spendBadge.style.borderColor = "rgba(245,158,11,0.24)";
+          spendBadge.textContent = "비용 $" + formatMicrosUSD(row.totalSpendMicros);
+          tokenBadges.appendChild(spendBadge);
           
           title.appendChild(tokenBadges);
           title.appendChild(el("span", "subline", "모델 " + formatNumber(row.modelCount) + "개 기준으로 집계"));
@@ -2360,8 +2701,11 @@
           var b = el("div", "metric"); b.appendChild(el("span", "metric-label", "총 토큰 24H")); b.appendChild(el("div", "metric-value", formatShort(row.tokens24h))); metrics.appendChild(b);
           var c = el("div", "metric"); c.appendChild(el("span", "metric-label", "요청 7D")); c.appendChild(el("div", "metric-value", formatShort(row.requests7d))); metrics.appendChild(c);
           var d = el("div", "metric"); d.appendChild(el("span", "metric-label", "총 토큰 7D")); d.appendChild(el("div", "metric-value", formatShort(row.tokens7d))); metrics.appendChild(d);
+          var e = el("div", "metric"); e.appendChild(el("span", "metric-label", "비용 24H")); e.appendChild(el("div", "metric-value", "$" + formatMicrosUSD(row.spend24hMicros))); metrics.appendChild(e);
+          var f = el("div", "metric"); f.appendChild(el("span", "metric-label", "비용 7D")); f.appendChild(el("div", "metric-value", "$" + formatMicrosUSD(row.spend7dMicros))); metrics.appendChild(f);
           var g = el("div", "metric"); g.appendChild(el("span", "metric-label", "누적 요청")); g.appendChild(el("div", "metric-value", formatShort(row.totalRequests))); metrics.appendChild(g);
           var h = el("div", "metric"); h.appendChild(el("span", "metric-label", "누적 총 토큰")); h.appendChild(el("div", "metric-value", formatShort(row.totalTokens))); metrics.appendChild(h);
+          var i = el("div", "metric"); i.appendChild(el("span", "metric-label", "누적 비용")); i.appendChild(el("div", "metric-value", "$" + formatMicrosUSD(row.totalSpendMicros))); metrics.appendChild(i);
           wrapper.appendChild(metrics);
 
           // Detailed token table.
@@ -2690,10 +3034,14 @@
 
         authFiles.forEach(function (item, idx) {
           var tone = getAuthTone(item);
-          var card = el("article", "auth-card" + (isAuthLimitOrError(item) ? " warn" : ""));
+          var premiumAuthType = getPremiumAuthCardType(item);
+          var cardClasses = "auth-card" + (isAuthLimitOrError(item) ? " warn" : "");
+          if (premiumAuthType) cardClasses += " auth-card-premium auth-card-premium-" + premiumAuthType;
+          var card = el("article", cardClasses);
           var quotaStack;
           var dailyBar;
           var weeklyBar;
+          var openrouterKey;
           var actions;
           var toggleButton;
           card.style.animationDelay = (idx * 0.05) + "s";
@@ -2722,11 +3070,32 @@
             if (quotaStack.childNodes.length) card.appendChild(quotaStack);
           }
 
+          openrouterKey = item.openrouter_key || null;
+          if ((item.provider || item.type) === "openrouter") {
+            var spendStack = el("div", "auth-quota-stack");
+            spendStack.appendChild(el("div", "subline", "로컬 누적 비용: $" + formatMicrosUSD(item.total_spend_micros || 0)));
+            if (item.spend_limit_usd) spendStack.appendChild(el("div", "subline", "설정 한도: $" + String(item.spend_limit_usd) + (item.remaining_spend_usd ? " · 로컬 잔여 $" + String(item.remaining_spend_usd) : "")));
+            if (openrouterKey && openrouterKey.limit_remaining !== undefined) {
+              spendStack.appendChild(el("div", "subline", "OpenRouter key 잔여: $" + String(openrouterKey.limit_remaining) + (openrouterKey.limit !== undefined ? " / 한도 $" + String(openrouterKey.limit) : "")));
+            }
+            if (openrouterKey && openrouterKey.usage !== undefined) {
+              spendStack.appendChild(el("div", "subline", "OpenRouter reported usage: $" + String(openrouterKey.usage)));
+            }
+            if (openrouterKey && openrouterKey.error) {
+              spendStack.appendChild(el("div", "subline", "OpenRouter key 조회 실패: " + String(openrouterKey.error)));
+            }
+            card.appendChild(spendStack);
+          }
+
           var stats = el("div", "auth-stats");
           var s1 = el("div", "stat-chip"); s1.appendChild(el("span", "label", "요청 24H")); s1.appendChild(el("div", "value", formatShort(item.requests_24h || 0))); stats.appendChild(s1);
           var s2 = el("div", "stat-chip"); s2.appendChild(el("span", "label", "토큰 24H")); s2.appendChild(el("div", "value", formatShort(item.tokens_24h || 0))); stats.appendChild(s2);
           var s3 = el("div", "stat-chip"); s3.appendChild(el("span", "label", "요청 7D")); s3.appendChild(el("div", "value", formatShort(item.requests_7d || 0))); stats.appendChild(s3);
           var s4 = el("div", "stat-chip"); s4.appendChild(el("span", "label", "토큰 7D")); s4.appendChild(el("div", "value", formatShort(item.tokens_7d || 0))); stats.appendChild(s4);
+          if ((item.provider || item.type) === "openrouter") {
+            var s5 = el("div", "stat-chip"); s5.appendChild(el("span", "label", "비용 24H")); s5.appendChild(el("div", "value", "$" + formatMicrosUSD(item.spend_24h_micros || 0))); stats.appendChild(s5);
+            var s6 = el("div", "stat-chip"); s6.appendChild(el("span", "label", "누적 비용")); s6.appendChild(el("div", "value", "$" + formatMicrosUSD(item.total_spend_micros || 0))); stats.appendChild(s6);
+          }
           card.appendChild(stats);
 
           var info = el("div", "metric-grid");
@@ -3308,6 +3677,11 @@
               if (concurrencyPanel) concurrencyPanel.hidden = false;
               setActionToast("동시성 섹션 불러오기 실패: " + (concurrencyError && concurrencyError.message ? concurrencyError.message : "unknown error"));
             }
+            try {
+              await loadOpenRouterConfig();
+            } catch (openrouterError) {
+              setActionToast("OpenRouter 설정 불러오기 실패: " + (openrouterError && openrouterError.message ? openrouterError.message : "unknown error"));
+            }
           } else {
             resetConcurrencyState();
           }
@@ -3347,6 +3721,31 @@
       apiKeyCreateButton.addEventListener("click", function () {
         createAPIKey();
       });
+
+      if (openrouterAuthNameInput) openrouterAuthNameInput.value = defaultOpenRouterAuthFileName();
+      if (openrouterAuthBaseURLInput) openrouterAuthBaseURLInput.value = "https://openrouter.ai/api/v1";
+      if (openrouterConfigBaseURLInput) openrouterConfigBaseURLInput.value = "https://openrouter.ai/api/v1";
+      if (openrouterModelsJSONInput) openrouterModelsJSONInput.value = "[]";
+
+      if (openrouterAuthCreateButton) {
+        openrouterAuthCreateButton.addEventListener("click", function () {
+          createOpenRouterAuthFile();
+        });
+      }
+
+      if (openrouterConfigReloadButton) {
+        openrouterConfigReloadButton.addEventListener("click", function () {
+          loadOpenRouterConfig().catch(function (error) {
+            setStatus("error", error && error.message ? error.message : "OpenRouter 설정 불러오기 실패");
+          });
+        });
+      }
+
+      if (openrouterConfigSaveButton) {
+        openrouterConfigSaveButton.addEventListener("click", function () {
+          saveOpenRouterConfig();
+        });
+      }
 
       if (setupGuideToggle) {
         setupGuideToggle.addEventListener("click", function () {
