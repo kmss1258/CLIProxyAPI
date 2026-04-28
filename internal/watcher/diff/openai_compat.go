@@ -3,6 +3,7 @@ package diff
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -150,7 +151,13 @@ func openAICompatSignature(entry config.OpenAICompatibility) string {
 		if name == "" && alias == "" {
 			continue
 		}
-		models = append(models, strings.ToLower(name)+"|"+strings.ToLower(alias))
+		providerJSON := ""
+		if len(model.Provider) > 0 {
+			if encoded, err := json.Marshal(model.Provider); err == nil {
+				providerJSON = string(encoded)
+			}
+		}
+		models = append(models, strings.ToLower(name)+"|"+strings.ToLower(alias)+"|"+providerJSON)
 	}
 	if len(models) > 0 {
 		sort.Strings(models)
@@ -180,4 +187,24 @@ func openAICompatSignature(entry config.OpenAICompatibility) string {
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])
+}
+
+func equalOpenAICompatModels(left, right []config.OpenAICompatibilityModel) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if strings.TrimSpace(left[i].Name) != strings.TrimSpace(right[i].Name) {
+			return false
+		}
+		if strings.TrimSpace(left[i].Alias) != strings.TrimSpace(right[i].Alias) {
+			return false
+		}
+		leftJSON, _ := json.Marshal(left[i].Provider)
+		rightJSON, _ := json.Marshal(right[i].Provider)
+		if string(leftJSON) != string(rightJSON) {
+			return false
+		}
+	}
+	return true
 }

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/diff"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
@@ -220,6 +221,11 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			}
 			if key != "" {
 				attrs["api_key"] = key
+			}
+			if limit := openrouter.NormalizeUSDString(entry.SpendLimitUSD); limit != "" {
+				if micros, ok := openrouter.ParseUSDMicrosString(limit); ok {
+					attrs["openrouter_spend_limit_micros"] = strconv.FormatInt(micros, 10)
+				}
 			}
 			if hash := diff.ComputeOpenAICompatModelsHash(compat.Models); hash != "" {
 				attrs["models_hash"] = hash

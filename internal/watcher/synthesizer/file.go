@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/geminicli"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
@@ -137,6 +138,9 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	if provider == openrouter.ProviderName {
+		applyOpenRouterFileMetadata(a, metadata)
+	}
 	// Read priority from auth file.
 	if rawPriority, ok := metadata["priority"]; ok {
 		switch v := rawPriority.(type) {
@@ -158,7 +162,11 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 		}
 	}
 	coreauth.ApplyCustomHeadersFromMetadata(a)
-	ApplyAuthExcludedModelsMeta(a, cfg, perAccountExcluded, "oauth")
+	authKind := "oauth"
+	if provider == openrouter.ProviderName {
+		authKind = "apikey"
+	}
+	ApplyAuthExcludedModelsMeta(a, cfg, perAccountExcluded, authKind)
 	// For codex auth files, extract plan_type from the JWT id_token.
 	if provider == "codex" {
 		if idTokenRaw, ok := metadata["id_token"].(string); ok && strings.TrimSpace(idTokenRaw) != "" {
@@ -181,6 +189,33 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 		}
 	}
 	return []*coreauth.Auth{a}
+}
+
+func applyOpenRouterFileMetadata(auth *coreauth.Auth, metadata map[string]any) {
+	if auth == nil || metadata == nil {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	auth.Attributes["compat_name"] = openrouter.ProviderName
+	auth.Attributes["provider_key"] = openrouter.ProviderName
+	if key, ok := metadata["api_key"].(string); ok {
+		if trimmed := strings.TrimSpace(key); trimmed != "" {
+			auth.Attributes["api_key"] = trimmed
+		}
+	}
+	baseURL := openrouter.DefaultBaseURL
+	if rawBaseURL, ok := metadata["base_url"].(string); ok {
+		if trimmed := strings.TrimSpace(rawBaseURL); trimmed != "" {
+			baseURL = trimmed
+		}
+	}
+	auth.Attributes["base_url"] = baseURL
+	if micros, ok := openrouter.ParseUSDMicrosAny(metadata["spend_limit_usd"]); ok && micros >= 0 {
+		auth.Attributes["openrouter_spend_limit_micros"] = strconv.FormatInt(micros, 10)
+		metadata["spend_limit_usd"] = openrouter.FormatUSDMicros(micros)
+	}
 }
 
 // SynthesizeGeminiVirtualAuths creates virtual Auth entries for multi-project Gemini credentials.
