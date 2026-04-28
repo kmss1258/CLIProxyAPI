@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -98,6 +100,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, opts.Stream)
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	translated = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
+	translated = e.applyOpenRouterProviderPreference(translated, req.Model, baseModel)
 	if opts.Alt == "responses/compact" {
 		if updated, errDelete := sjson.DeleteBytes(translated, "stream"); errDelete == nil {
 			translated = updated
@@ -200,6 +203,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	translated = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
+	translated = e.applyOpenRouterProviderPreference(translated, req.Model, baseModel)
 
 	translated, err = thinking.ApplyThinking(translated, req.Model, from.String(), to.String(), e.Identifier())
 	if err != nil {
@@ -357,6 +361,14 @@ func (e *OpenAICompatExecutor) resolveCredentials(auth *cliproxyauth.Auth) (base
 		baseURL = strings.TrimSpace(auth.Attributes["base_url"])
 		apiKey = strings.TrimSpace(auth.Attributes["api_key"])
 	}
+	if compat := e.resolveCompatConfig(auth); compat != nil {
+		if strings.TrimSpace(baseURL) == "" {
+			baseURL = strings.TrimSpace(compat.BaseURL)
+		}
+	}
+	if strings.TrimSpace(baseURL) == "" && openrouter.IsProviderName(e.provider) {
+		baseURL = openrouter.DefaultBaseURL
+	}
 	return
 }
 
@@ -393,6 +405,47 @@ func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byt
 	}
 	payload, _ = sjson.SetBytes(payload, "model", model)
 	return payload
+}
+
+func (e *OpenAICompatExecutor) applyOpenRouterProviderPreference(payload []byte, rawModel, baseModel string) []byte {
+	if len(payload) == 0 || !openrouter.IsProviderName(e.provider) {
+		return payload
+	}
+	modelConfig := e.resolveCompatModel(rawModel, baseModel)
+	if modelConfig == nil || len(modelConfig.Provider) == 0 {
+		return payload
+	}
+	providerJSON, err := json.Marshal(modelConfig.Provider)
+	if err != nil || len(providerJSON) == 0 {
+		return payload
+	}
+	updated, err := sjson.SetRawBytes(payload, "provider", providerJSON)
+	if err != nil {
+		return payload
+	}
+	return updated
+}
+
+func (e *OpenAICompatExecutor) resolveCompatModel(rawModel, baseModel string) *config.OpenAICompatibilityModel {
+	compat := e.resolveCompatConfig(&cliproxyauth.Auth{Provider: e.provider, Attributes: map[string]string{"compat_name": e.provider, "provider_key": e.provider}})
+	if compat == nil {
+		return nil
+	}
+	candidates := []string{strings.TrimSpace(rawModel), strings.TrimSpace(baseModel), strings.TrimSpace(thinking.ParseSuffix(rawModel).ModelName)}
+	for i := range compat.Models {
+		model := &compat.Models[i]
+		name := strings.TrimSpace(model.Name)
+		alias := strings.TrimSpace(model.Alias)
+		for _, candidate := range candidates {
+			if candidate == "" {
+				continue
+			}
+			if candidate == alias || candidate == name {
+				return model
+			}
+		}
+	}
+	return nil
 }
 
 type statusErr struct {

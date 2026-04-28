@@ -5,14 +5,18 @@ package cliproxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/openrouter"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -367,6 +371,111 @@ func openAICompatInfoFromAuth(a *coreauth.Auth) (providerKey string, compatName 
 		return "openai-compatibility", strings.TrimSpace(a.Label), true
 	}
 	return "", "", false
+}
+
+type openRouterModelsResponse struct {
+	Data []struct {
+		ID                  string   `json:"id"`
+		Name                string   `json:"name"`
+		Description         string   `json:"description"`
+		ContextLength       int      `json:"context_length"`
+		SupportedParameters []string `json:"supported_parameters"`
+		TopProvider         struct {
+			MaxCompletionTokens int `json:"max_completion_tokens"`
+		} `json:"top_provider"`
+	} `json:"data"`
+}
+
+func fetchOpenRouterModels(auth *coreauth.Auth) []*ModelInfo {
+	if auth == nil || auth.Attributes == nil {
+		return nil
+	}
+	apiKey := strings.TrimSpace(auth.Attributes["api_key"])
+	if apiKey == "" {
+		return nil
+	}
+	baseURL := strings.TrimSpace(auth.Attributes["base_url"])
+	if baseURL == "" {
+		baseURL = openrouter.DefaultBaseURL
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimSuffix(baseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.WithError(err).Warn("openrouter model discovery failed")
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		log.Warnf("openrouter model discovery returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil
+	}
+	var payload openRouterModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		log.WithError(err).Warn("openrouter model discovery decode failed")
+		return nil
+	}
+	models := make([]*ModelInfo, 0, len(payload.Data))
+	for _, item := range payload.Data {
+		modelID := strings.TrimSpace(item.ID)
+		if modelID == "" {
+			continue
+		}
+		displayName := strings.TrimSpace(item.Name)
+		if displayName == "" {
+			displayName = modelID
+		}
+		models = append(models, &ModelInfo{
+			ID:                  modelID,
+			Object:              "model",
+			Created:             time.Now().Unix(),
+			OwnedBy:             openrouter.ProviderName,
+			Type:                "openai-compatibility",
+			DisplayName:         displayName,
+			Description:         strings.TrimSpace(item.Description),
+			ContextLength:       item.ContextLength,
+			MaxCompletionTokens: item.TopProvider.MaxCompletionTokens,
+			SupportedParameters: append([]string(nil), item.SupportedParameters...),
+			Thinking:            &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}},
+			UserDefined:         false,
+		})
+	}
+	return models
+}
+
+func mergeModelLists(primary []*ModelInfo, extra []*ModelInfo) []*ModelInfo {
+	if len(primary) == 0 {
+		return extra
+	}
+	if len(extra) == 0 {
+		return primary
+	}
+	merged := make([]*ModelInfo, 0, len(primary)+len(extra))
+	seen := make(map[string]struct{}, len(primary)+len(extra))
+	for _, model := range primary {
+		if model == nil || strings.TrimSpace(model.ID) == "" {
+			continue
+		}
+		merged = append(merged, model)
+		seen[strings.TrimSpace(model.ID)] = struct{}{}
+	}
+	for _, model := range extra {
+		if model == nil || strings.TrimSpace(model.ID) == "" {
+			continue
+		}
+		if _, ok := seen[strings.TrimSpace(model.ID)]; ok {
+			continue
+		}
+		merged = append(merged, model)
+		seen[strings.TrimSpace(model.ID)] = struct{}{}
+	}
+	return merged
 }
 
 func (s *Service) ensureExecutorsForAuth(a *coreauth.Auth) {
@@ -972,6 +1081,9 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 					isCompatAuth = true
 					// Convert compatibility models to registry models
 					ms := make([]*ModelInfo, 0, len(compat.Models))
+					if openrouter.IsProviderName(providerKey) || openrouter.IsProviderName(compat.Name) {
+						ms = mergeModelLists(ms, fetchOpenRouterModels(a))
+					}
 					for j := range compat.Models {
 						m := compat.Models[j]
 						// Use alias as model ID, fallback to name if alias is empty
