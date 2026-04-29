@@ -189,6 +189,40 @@ func TestApplyClientAPIKeySelectedAuthRejectsUnsupportedModel(t *testing.T) {
 	}
 }
 
+func TestApplyClientAPIKeySelectedAuthAllowsProviderPrefixedModelMatch(t *testing.T) {
+	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}
+	registerSelectedAuthTestModel(t, auth, "openai/gpt-5.4")
+	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	ctx, err := handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"openai"}, "gpt-5.4")
+	if err != nil {
+		t.Fatalf("applyClientAPIKeySelectedAuth() error = %v", err)
+	}
+	if got := pinnedAuthIDFromContext(ctx); got != auth.ID {
+		t.Fatalf("pinned auth id = %q, want %q", got, auth.ID)
+	}
+
+	ctx, err = handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"openai"}, "openai/gpt-5.4")
+	if err != nil {
+		t.Fatalf("applyClientAPIKeySelectedAuth() error = %v", err)
+	}
+	if got := pinnedAuthIDFromContext(ctx); got != auth.ID {
+		t.Fatalf("pinned auth id = %q, want %q", got, auth.ID)
+	}
+}
+
+func TestApplyClientAPIKeySelectedAuthAllowsModelPrefixMatch(t *testing.T) {
+	auth := &coreauth.Auth{ID: "auth-1", Provider: "gemini", Status: coreauth.StatusActive}
+	registerSelectedAuthTestModel(t, auth, "models/gemini-3-flash-preview")
+	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	ctx, err := handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"gemini"}, "gemini-3-flash-preview")
+	if err != nil {
+		t.Fatalf("applyClientAPIKeySelectedAuth() error = %v", err)
+	}
+	if got := pinnedAuthIDFromContext(ctx); got != auth.ID {
+		t.Fatalf("pinned auth id = %q, want %q", got, auth.ID)
+	}
+}
+
 func TestExecuteWithAuthManagerUsesSelectedAuth(t *testing.T) {
 	executor := &selectedAuthExecuteExecutor{}
 	auth := &coreauth.Auth{ID: "auth-1", Provider: "codex", Status: coreauth.StatusActive}

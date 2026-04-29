@@ -351,32 +351,69 @@ func authSupportsRequest(auth *coreauth.Auth, providers []string, modelName stri
 	if auth.Disabled || auth.Unavailable {
 		return false
 	}
-	providerAllowed := len(providers) == 0
-	providerKey := strings.ToLower(strings.TrimSpace(auth.Provider))
-	for _, provider := range providers {
-		if providerKey == strings.ToLower(strings.TrimSpace(provider)) {
-			providerAllowed = true
-			break
-		}
-	}
-	if !providerAllowed {
-		return false
-	}
 	modelStates := auth.ModelStates
 	if modelStates != nil {
-		if state, ok := modelStates[strings.TrimSpace(modelName)]; ok && state != nil && state.Unavailable {
-			return false
+		for _, key := range supportedModelLookupKeys(modelName) {
+			if state, ok := modelStates[key]; ok && state != nil && state.Unavailable {
+				return false
+			}
 		}
+	}
+	want := make(map[string]struct{})
+	for _, key := range supportedModelLookupKeys(modelName) {
+		want[strings.ToLower(key)] = struct{}{}
 	}
 	for _, model := range registry.GetGlobalRegistry().GetModelsForClient(auth.ID) {
 		if model == nil {
 			continue
 		}
-		if strings.TrimSpace(model.ID) == strings.TrimSpace(modelName) {
-			return true
+		for _, key := range supportedModelLookupKeys(model.ID) {
+			if _, ok := want[strings.ToLower(key)]; ok {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func supportedModelLookupKeys(modelName string) []string {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return nil
+	}
+	keys := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	appendKey := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		keys = append(keys, value)
+	}
+	appendKey(modelName)
+	appendKey(canonicalSelectedAuthModelKey(modelName))
+	if idx := strings.LastIndex(modelName, "/"); idx >= 0 && idx+1 < len(modelName) {
+		trimmed := strings.TrimSpace(modelName[idx+1:])
+		appendKey(trimmed)
+		appendKey(canonicalSelectedAuthModelKey(trimmed))
+	}
+	return keys
+}
+
+func canonicalSelectedAuthModelKey(modelName string) string {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return ""
+	}
+	parsed := thinking.ParseSuffix(modelName)
+	if trimmed := strings.TrimSpace(parsed.ModelName); trimmed != "" {
+		return trimmed
+	}
+	return modelName
 }
 
 func selectedAuthRestrictionError(apiKey string, policy selectedAuthPolicy, modelName, reason string) error {

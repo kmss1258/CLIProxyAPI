@@ -61,6 +61,7 @@ docker compose up -d --build --pull never cli-proxy-api
 - Quota handling in this repo is primarily credential/provider cooldown and failover behavior (`quota-exceeded`, auth/model cooldown state), not a configurable "this API key may spend N tokens" policy.
 - Subscription-backed OAuth/account flows are supported for built-in providers such as Codex/OpenAI, Claude, Gemini, iFlow, Amp, Antigravity, and Kimi where corresponding auth/runtime modules exist.
 - `openai-compatibility` supports arbitrary OpenAI-compatible upstreams configured with `base-url` + API keys. That means a nanoGPT-like service can work **if** it exposes a compatible upstream API, but there is no explicit first-class `nanoGPT` integration in this codebase.
+- When debugging `selected_auth_unavailable` for OAuth/Codex/OpenAI-family requests, do not trust the global `/v1/models` list alone. Verify the specific auth's registry view via `GET /v0/management/auth-files/models?name=<auth-file-or-id>` and compare canonical model IDs across plain IDs (`gpt-5.4`), provider-prefixed IDs (`openai/gpt-5.4`), and provider-native IDs (`models/...`). The selected-auth support gate must treat those equivalent forms consistently.
 
 ## Code Conventions
 - Keep changes small and simple (KISS)
