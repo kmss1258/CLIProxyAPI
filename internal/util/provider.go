@@ -5,6 +5,7 @@ package util
 
 import (
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -51,12 +52,30 @@ func GetProviderName(modelName string) []string {
 	for _, provider := range registry.GetGlobalRegistry().GetModelProviders(modelName) {
 		appendProvider(provider)
 	}
+	if idx := strings.LastIndex(strings.TrimSpace(modelName), "/"); idx >= 0 && idx+1 < len(strings.TrimSpace(modelName)) {
+		for _, provider := range registry.GetGlobalRegistry().GetModelProviders(strings.TrimSpace(modelName[idx+1:])) {
+			appendProvider(provider)
+		}
+	}
 
 	if len(providers) > 0 {
+		sort.SliceStable(providers, func(i, j int) bool {
+			return providerPreferenceRank(providers[i]) < providerPreferenceRank(providers[j])
+		})
 		return providers
 	}
 
 	return providers
+}
+
+func providerPreferenceRank(provider string) int {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	switch provider {
+	case "openrouter", "openai-compatibility":
+		return 100
+	default:
+		return 0
+	}
 }
 
 // ResolveAutoModel resolves the "auto" model name to an actual available model.

@@ -21,15 +21,23 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 	modelRegistry.RegisterClient("test-request-details-openai", "openai", []*registry.ModelInfo{
 		{ID: "gpt-5.2", Created: now + 20},
 	})
+	modelRegistry.RegisterClient("test-request-details-codex", "codex", []*registry.ModelInfo{
+		{ID: "gpt-5.4", Created: now + 15},
+	})
 	modelRegistry.RegisterClient("test-request-details-claude", "claude", []*registry.ModelInfo{
 		{ID: "claude-sonnet-4-5", Created: now + 5},
+	})
+	modelRegistry.RegisterClient("test-request-details-openrouter", "openrouter", []*registry.ModelInfo{
+		{ID: "openai/gpt-5.4", Created: now + 4},
 	})
 
 	// Ensure cleanup of all test registrations.
 	clientIDs := []string{
 		"test-request-details-gemini",
 		"test-request-details-openai",
+		"test-request-details-codex",
 		"test-request-details-claude",
+		"test-request-details-openrouter",
 	}
 	for _, clientID := range clientIDs {
 		id := clientID
@@ -94,6 +102,13 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 			inputModel:    "claude-sonnet-4-5(auto)",
 			wantProviders: []string{"claude"},
 			wantModel:     "claude-sonnet-4-5(auto)",
+			wantErr:       false,
+		},
+		{
+			name:          "provider prefixed model prefers oauth family before openrouter",
+			inputModel:    "openai/gpt-5.4",
+			wantProviders: []string{"codex", "openrouter"},
+			wantModel:     "openai/gpt-5.4",
 			wantErr:       false,
 		},
 	}
