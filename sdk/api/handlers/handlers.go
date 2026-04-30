@@ -348,16 +348,8 @@ func authSupportsRequest(auth *coreauth.Auth, providers []string, modelName stri
 	if auth == nil || strings.TrimSpace(auth.ID) == "" {
 		return false
 	}
-	if auth.Disabled || auth.Unavailable {
+	if auth.Disabled || auth.Status == coreauth.StatusDisabled {
 		return false
-	}
-	modelStates := auth.ModelStates
-	if modelStates != nil {
-		for _, key := range supportedModelLookupKeys(modelName) {
-			if state, ok := modelStates[key]; ok && state != nil && state.Unavailable {
-				return false
-			}
-		}
 	}
 	want := make(map[string]struct{})
 	for _, key := range supportedModelLookupKeys(modelName) {

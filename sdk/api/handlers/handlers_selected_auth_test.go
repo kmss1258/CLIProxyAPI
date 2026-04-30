@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -215,6 +216,52 @@ func TestApplyClientAPIKeySelectedAuthAllowsModelPrefixMatch(t *testing.T) {
 	registerSelectedAuthTestModel(t, auth, "models/gemini-3-flash-preview")
 	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
 	ctx, err := handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"gemini"}, "gemini-3-flash-preview")
+	if err != nil {
+		t.Fatalf("applyClientAPIKeySelectedAuth() error = %v", err)
+	}
+	if got := pinnedAuthIDFromContext(ctx); got != auth.ID {
+		t.Fatalf("pinned auth id = %q, want %q", got, auth.ID)
+	}
+}
+
+func TestApplyClientAPIKeySelectedAuthIgnoresExpiredUnavailableModelState(t *testing.T) {
+	auth := &coreauth.Auth{
+		ID:       "auth-1",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		ModelStates: map[string]*coreauth.ModelState{
+			"gpt-5.4-mini": {
+				Unavailable:    true,
+				NextRetryAfter: time.Now().Add(-1 * time.Minute),
+			},
+		},
+	}
+	registerSelectedAuthTestModel(t, auth, "gpt-5.4-mini")
+	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	ctx, err := handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"codex"}, "gpt-5.4-mini")
+	if err != nil {
+		t.Fatalf("applyClientAPIKeySelectedAuth() error = %v", err)
+	}
+	if got := pinnedAuthIDFromContext(ctx); got != auth.ID {
+		t.Fatalf("pinned auth id = %q, want %q", got, auth.ID)
+	}
+}
+
+func TestApplyClientAPIKeySelectedAuthIgnoresActiveUnavailableModelState(t *testing.T) {
+	auth := &coreauth.Auth{
+		ID:       "auth-1",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		ModelStates: map[string]*coreauth.ModelState{
+			"gpt-5.4-mini": {
+				Unavailable:    true,
+				NextRetryAfter: time.Now().Add(1 * time.Minute),
+			},
+		},
+	}
+	registerSelectedAuthTestModel(t, auth, "gpt-5.4-mini")
+	handler := selectedAuthTestHandler(t, &selectedAuthExecuteExecutor{}, []internalconfig.ClientAPIKeyPolicy{{APIKey: "client-key", SelectedAuthIndex: auth.EnsureIndex()}}, auth)
+	ctx, err := handler.applyClientAPIKeySelectedAuth(selectedAuthTestContext("client-key"), []string{"codex"}, "gpt-5.4-mini")
 	if err != nil {
 		t.Fatalf("applyClientAPIKeySelectedAuth() error = %v", err)
 	}
